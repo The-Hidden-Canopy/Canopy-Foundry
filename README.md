@@ -6,6 +6,37 @@ models, checkpoints, configuration, and execution environment.
 The public repository contains the runtime capability. The Hidden Canopy Hub
 remains the authenticated coordination and authority layer.
 
+## Public Boundary and Runtime Hardening Update
+
+The current public release is commit [`145c7b2`](https://github.com/The-Hidden-Canopy/Canopy-Foundry/commit/145c7b2fe169c19726d0d92074925b87f7f39eb8).
+
+This update strengthens the boundary between local training capability and the
+separate Hidden Canopy Hub coordination layer.
+
+It adds:
+
+- private-runtime package and binary integrity verification using SHA-256 pins
+- exact model and checkpoint architecture-contract matching
+- explicit acknowledgement for experimental profiles and model contracts
+- manifest fingerprint validation against stale or substituted requests
+- symlink and directory-substitution protection for local receipts
+- history-aware public-boundary scanning for private paths and artifacts
+- expanded adversarial coverage for local asset escapes, private fields, raw
+  telemetry, contract substitution, and legacy request bypasses
+
+The public tree contains no private runtime packages, model data, checkpoints,
+credentials, local filesystem paths, raw logs, or private historical paths.
+The public boundary and reachable Git history both pass the release checks, and
+84 Foundry tests pass for this update.
+
+This is a source-available release, not a claim of universal hardware or
+production parity. Native CMake, CUDA, OpenCL, and hardware-specific
+performance validation remain dependent on the operator's environment.
+
+Do not add local backups, Hub control-plane files, v2 blackboard content,
+datasets, models, checkpoints, credentials, logs, or private runtime packages
+to this repository.
+
 Neural Foundry is the public product and runtime identity. The local component
 is called the Neural Forge worker in implementation documentation and
 compatibility interfaces. Names such as `neural_forge_worker.py`,
