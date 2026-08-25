@@ -716,10 +716,14 @@ void flash_attn_backward(
 // d_segs: optional per-position sample-start offsets [B, S] (u16, B = BH/nH).
 // Position i may attend only to j in [segs[i], i] — block-diagonal causal
 // attention over packed samples.  nullptr = full causal (old behavior).
-// nKVH (GQA, grouped-query attention): number of K/V heads.  0 (default)
-// means MHA (nKVH = nH).  When 0 < nKVH < nH, K/V (and dK/dV) are laid out
-// [B, nKVH, S, Hd] and each group of nH/nKVH query heads shares one KV head.
-// Scalar-flash backend only; every other backend throws on a grouped request.
+// nKVH (GQA, grouped-query attention): number of logical K/V heads.  0
+// (default) means MHA (nKVH = nH).  The public trainer materializes each
+// shared K/V head across its query-head group before entering this low-level
+// scalar contract, so d_k/d_v and their gradients are always laid out
+// [B, nH, S, Hd] here; the trainer reduces dK/dV back to [B, nKVH, S, Hd]
+// after the call.  The wrapper validates the logical grouping and retains it
+// in the ABI so backend selection cannot silently accept malformed head
+// metadata.
 void attention_forward(
     AttentionBackendKind backend,
     const __nv_bfloat16* d_q, const __nv_bfloat16* d_k, const __nv_bfloat16* d_v,

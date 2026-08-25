@@ -12,7 +12,9 @@ option(IDA_NATIVE_AMD_ENABLE_CPU
   "Build the host CPU reference backend"
   ON)
 
-find_package(nlohmann_json 3.11 CONFIG REQUIRED)
+if(NOT TARGET nlohmann_json::nlohmann_json)
+  find_package(nlohmann_json 3.11 CONFIG REQUIRED)
+endif()
 
 if(IDA_NATIVE_AMD_ENABLE_OPENCL)
   find_package(OpenCL QUIET)

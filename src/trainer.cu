@@ -2736,7 +2736,6 @@ static std::vector<ParamSlot> build_param_slots(
     const std::size_t V = w.vocab_size;
     const std::size_t KV = static_cast<std::size_t>(w.kv_heads > 0 ? w.kv_heads : w.heads) *
         static_cast<std::size_t>(w.hidden_size / w.heads);
-        if (weight == nullptr) return;
     std::vector<ParamSlot> slots;
     auto add_bf16 = [&](auto* weight, OptStateTensor m, OptStateTensor v,
                         __nv_bfloat16* grad, std::size_t n, float weight_decay) {
@@ -11652,7 +11651,9 @@ BurnResult run_lattice_training_model_parallel(
     const float lion_b2 = lion_beta2(request);
     const float lion_lr_mult = lion_lr_scale(request);
     const float lion_wd_mult = lion_wd_scale(request);
+#if IDA_NATIVE_ENABLE_ADAMW
     const float adam_b1 = 0.9f, adam_b2 = 0.999f, adam_eps = 1e-8f;
+#endif
     const bool lr_accum_coupling = [] {
         const char* e = std::getenv("IDA_NATIVE_LR_ACCUM_COUPLING");
         return !e || e[0] == '1';

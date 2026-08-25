@@ -1,6 +1,11 @@
 /build/
 /bin/
 /runs/
+/run-output/
+/smoke-run/
+/output/
+/outputs/
+/.deps/
 /private-runtime/
 /.private-runtime/
 *.bak*

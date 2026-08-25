@@ -515,10 +515,14 @@ locally pinned checkpoint. The Hub, native adapter, and worker reject a mode
 that does not match its parent, and the worker enforces the approved
 `max_steps` ceiling against the local config.
 
-Build the public native target with private observability disabled (the
-default). A private deployment may explicitly set
-`-DIDA_NATIVE_ENABLE_PRIVATE_OBSERVABILITY=ON`; that build and its binding
-remain deployment-owned and must not be copied into the public repository.
+Build the public native target with private observability disabled. The
+canonical public build also sets `CANOPY_FOUNDRY_PUBLIC_BUILD=ON` and fails
+configuration if a stale cache enables private observability; it can therefore
+never enter a native burn requiring ontology or analytics sinks. A private
+deployment may explicitly set
+`-DCANOPY_FOUNDRY_PUBLIC_BUILD=OFF -DIDA_NATIVE_ENABLE_PRIVATE_OBSERVABILITY=ON`;
+that binary and its binding remain deployment-owned and must not be used as
+public release evidence or copied into the public repository.
 The private observability headers are ignored local overlay files; public
 builds resolve the no-op contracts under `include-public/ida_native/` instead.
 The public CPU boundary can be configured with `cmake --preset public-cpu` and

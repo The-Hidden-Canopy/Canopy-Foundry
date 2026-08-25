@@ -68,6 +68,79 @@ class ModelPortabilitySurfaceTests(unittest.TestCase):
         self.assertNotIn("  kernels/adamw.cu", cmake)
         self.assertFalse((ROOT / "kernels" / "adamw.cu").exists())
 
+    def test_public_build_cannot_inherit_private_observability(self) -> None:
+        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        presets = (ROOT / "CMakePresets.json").read_text(encoding="utf-8")
+        self.assertIn("option(CANOPY_FOUNDRY_PUBLIC_BUILD", cmake)
+        self.assertIn(
+            "if(CANOPY_FOUNDRY_PUBLIC_BUILD AND IDA_NATIVE_ENABLE_PRIVATE_OBSERVABILITY)",
+            cmake,
+        )
+        self.assertIn('"CANOPY_FOUNDRY_PUBLIC_BUILD": "ON"', presets)
+        self.assertIn('"IDA_NATIVE_ENABLE_PRIVATE_OBSERVABILITY": "OFF"', presets)
+
+    def test_public_build_has_a_pinned_nlohmann_fallback(self) -> None:
+        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        amd_cmake = (ROOT / "amd" / "CMakeLists.txt").read_text(encoding="utf-8")
+        self.assertIn("find_package(nlohmann_json 3.11 CONFIG QUIET)", cmake)
+        self.assertIn("FetchContent_Declare(nlohmann_json", cmake)
+        self.assertIn(
+            "URL_HASH SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d",
+            cmake,
+        )
+        self.assertIn(
+            "if(NOT TARGET nlohmann_json::nlohmann_json)",
+            amd_cmake,
+        )
+
+    def test_generated_run_and_dependency_trees_are_ignored(self) -> None:
+        gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+        for path in ("/run-output/", "/smoke-run/", "/output/", "/outputs/", "/.deps/"):
+            self.assertIn(path, gitignore)
+
+    def test_public_build_does_not_compile_dead_adam_constants(self) -> None:
+        trainer = (ROOT / "src" / "trainer.cu").read_text(encoding="utf-8")
+        self.assertIn(
+            "#if IDA_NATIVE_ENABLE_ADAMW\n    const float adam_b1",
+            trainer,
+        )
+
+    def test_public_cuda_sources_have_no_known_compile_boundary_regressions(self) -> None:
+        trainer = (ROOT / "src" / "trainer.cu").read_text(encoding="utf-8")
+        fp8 = (ROOT / "kernels" / "fp8.cu").read_text(encoding="utf-8")
+        self.assertNotIn("if (weight == nullptr) return;", trainer)
+        self.assertIn('#include "ida_native/pack_trace.hpp"', fp8)
+
+    def test_public_cuda_target_contains_the_declared_kernel_definitions(self) -> None:
+        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        activations = (ROOT / "kernels" / "activations.cu").read_text(encoding="utf-8")
+        positions = (ROOT / "kernels" / "position_embeddings.cu").read_text(encoding="utf-8")
+        attention = (ROOT / "kernels" / "attention.cu").read_text(encoding="utf-8")
+        for source in ("kernels/activations.cu", "kernels/position_embeddings.cu"):
+            self.assertIn(source, cmake)
+        for symbol in ("void swiglu_forward", "void swiglu_backward"):
+            self.assertIn(symbol, activations)
+        for symbol in ("void position_embedding_forward", "void position_embedding_backward"):
+            self.assertIn(symbol, positions)
+        self.assertIn("void attention_forward", attention)
+        self.assertIn("void attention_backward", attention)
+        self.assertIn("cudaStream_t stream, int nKVH", attention)
+
+    def test_native_artifacts_require_explicit_promotion_enablement(self) -> None:
+        main = (ROOT / "src" / "main.cpp").read_text(encoding="utf-8")
+        checkpoint = (ROOT / "src" / "checkpoint.cpp").read_text(encoding="utf-8")
+        self.assertIn("request.promotion_enabled && merged_weights", main)
+        self.assertIn("request.promotion_enabled &&", main)
+        self.assertIn(
+            "const bool promotion_eligible = request.promotion_enabled && real_weights;",
+            checkpoint,
+        )
+        self.assertNotIn("const bool promotion_eligible = real_weights;", checkpoint)
+        self.assertNotIn(
+            '(real_weights ? "true" : "false")',
+            checkpoint,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

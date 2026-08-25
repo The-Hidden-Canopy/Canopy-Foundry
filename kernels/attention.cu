@@ -1921,8 +1921,12 @@ void attention_forward(
     const PackedFp4AttentionOperands* packed_fp4,
     const std::uint16_t* d_segs, int nH,
     int BH, int S, int Hd, float scale,
-    cudaStream_t stream
+    cudaStream_t stream, int nKVH
 ) {
+    if (nH <= 0 || BH <= 0 || S <= 0 || Hd <= 0 ||
+        nKVH < 0 || (nKVH > 0 && (nKVH > nH || nH % nKVH != 0))) {
+        throw std::invalid_argument("attention_forward received invalid head dimensions");
+    }
     switch (backend) {
         case AttentionBackendKind::ScalarFlash:
             flash_attn_forward(d_q, d_k, d_v, d_o, d_lse, d_segs, nH, BH, S, Hd, scale, stream);
@@ -1952,8 +1956,12 @@ void attention_backward(
     const PackedFp4AttentionOperands* packed_fp4,
     const std::uint16_t* d_segs, int nH,
     int BH, int S, int Hd, float scale,
-    cudaStream_t stream
+    cudaStream_t stream, int nKVH
 ) {
+    if (nH <= 0 || BH <= 0 || S <= 0 || Hd <= 0 ||
+        nKVH < 0 || (nKVH > 0 && (nKVH > nH || nH % nKVH != 0))) {
+        throw std::invalid_argument("attention_backward received invalid head dimensions");
+    }
     switch (backend) {
         case AttentionBackendKind::ScalarFlash:
             flash_attn_backward(

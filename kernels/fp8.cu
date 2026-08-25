@@ -1,5 +1,6 @@
 #include "ida_native/kernels.hpp"
 #include "ida_native/gemm_trace.hpp"
+#include "ida_native/pack_trace.hpp"
 #include "ida_native/fp8_e4m3.hpp"
 #include "ida_native/cuda_check.hpp"
 

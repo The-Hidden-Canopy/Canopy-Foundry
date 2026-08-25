@@ -761,7 +761,7 @@ void execute_burn(
                 "\"peer_backward_bytes\": " + std::to_string(result.peer_backward_bytes),
                 result_device_fields,
                 std::string("\"promotion_eligible\": ") +
-                    (merged_weights ? "true" : "false")
+                    (request.promotion_enabled && merged_weights ? "true" : "false")
             }
         );
         if (!merged_weights) {
@@ -792,7 +792,8 @@ void execute_burn(
     // the BF16-versus-packed numerical canary decision.
     const bool experimental_moe_1f1b =
         request.hardware_profile == "rtx3090_moe_1f1b_bf16grad";
-    const bool promotion_eligible = !experimental_moe_1f1b &&
+    const bool promotion_eligible = request.promotion_enabled &&
+        !experimental_moe_1f1b &&
         std::filesystem::is_regular_file(request.output_dir / "model.safetensors");
     ida_native::write_status(
         request.status_file,

@@ -1525,7 +1525,7 @@ void write_checkpoint_artifacts(
         std::filesystem::is_regular_file(request.output_dir / "model.safetensors");
     const char* artifact_format =
         real_weights ? "native_safetensors_v1" : "smoke_placeholder";
-    const bool promotion_eligible = real_weights;
+    const bool promotion_eligible = request.promotion_enabled && real_weights;
 
     if (real_weights) {
         write_text(
@@ -1660,7 +1660,8 @@ void write_final_artifacts(
         << "  \"gemm_accumulator_precision\": \"" << request.gemm_accumulator_precision << "\",\n"
         << "  \"engine_revision\": \"" << request.engine_revision << "\",\n"
         << "  \"architecture_compatibility\": \"" << request.architecture_compatibility << "\",\n"
-        << "  \"promotion_eligible\": " << (real_weights ? "true" : "false") << ",\n"
+        << "  \"promotion_eligible\": " <<
+            (request.promotion_enabled && real_weights ? "true" : "false") << ",\n"
         << "  \"global_step\": " << result.global_step << "\n"
         << "}\n";
     write_text(final_dir / "native_model_config.json", config.str());

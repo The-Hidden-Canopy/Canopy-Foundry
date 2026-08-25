@@ -3,7 +3,27 @@ cmake_minimum_required(VERSION 3.28)
 project(ida_native_train LANGUAGES CXX)
 
 include(CheckLanguage)
-find_package(nlohmann_json 3.11 CONFIG REQUIRED)
+include(FetchContent)
+
+# Prefer an operator/CI-provided package, but keep the public checkout
+# reproducible on a clean toolchain.  The fallback is pinned to an official
+# release and stays inside the CMake build tree; it is never installed or
+# copied into the repository.
+find_package(nlohmann_json 3.11 CONFIG QUIET)
+if(NOT nlohmann_json_FOUND)
+  set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
+  set(JSON_Install OFF CACHE BOOL "" FORCE)
+  set(JSON_MultipleHeaders ON CACHE BOOL "" FORCE)
+  FetchContent_Declare(nlohmann_json
+    URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+    URL_HASH SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+  )
+  FetchContent_MakeAvailable(nlohmann_json)
+endif()
+if(NOT TARGET nlohmann_json::nlohmann_json)
+  message(FATAL_ERROR "nlohmann_json target is unavailable after package lookup/fallback")
+endif()
 
 option(IDA_NATIVE_ENABLE_CUDA
   "Build the CUDA trainer when a CUDA compiler is available"
@@ -14,6 +34,20 @@ option(IDA_NATIVE_ENABLE_AMD
 option(IDA_NATIVE_ENABLE_PRIVATE_OBSERVABILITY
   "Enable private ontology, GEMM, pack, and analytics observability"
   OFF)
+
+# The canonical Canopy Foundry target is public by default.  A stale build
+# directory must not turn it into a deployment-owned binary that blocks on
+# ontology or analytics sinks.  Private overlay builds remain possible for a
+# local deployment, but they must be explicitly identified as non-public.
+option(CANOPY_FOUNDRY_PUBLIC_BUILD
+  "Build the public/local runtime surface"
+  ON)
+if(CANOPY_FOUNDRY_PUBLIC_BUILD AND IDA_NATIVE_ENABLE_PRIVATE_OBSERVABILITY)
+  message(FATAL_ERROR
+    "Public Canopy Foundry builds cannot enable private observability; "
+    "set IDA_NATIVE_ENABLE_PRIVATE_OBSERVABILITY=OFF or explicitly set "
+    "CANOPY_FOUNDRY_PUBLIC_BUILD=OFF for a deployment-owned overlay build")
+endif()
 
 # Adam/AdamW is not part of the public/native execution graph. The legacy
 # implementation is not part of the public source tree or any released target.
@@ -83,6 +117,8 @@ add_executable(ida_native_train
   src/checkpoint.cpp
   src/telemetry.cpp
   kernels/embedding.cu
+  kernels/position_embeddings.cu
+  kernels/activations.cu
   kernels/layernorm.cu
   kernels/rmsnorm.cu
   kernels/cross_entropy.cu
@@ -143,6 +179,26 @@ set_target_properties(rope_probe PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin"
 )
 
+# Public scalar-kernel contract probe.  This is deliberately separate from
+# the trainer binary: it proves the two small public kernels that are used by
+# GPT-2 and dense/MoE FFN paths without requiring a model, dataset, or local
+# deployment binding.  Build and run it on a CUDA-equipped host when making a
+# native release; it is excluded from the default build for the same reason as
+# rope_probe.
+add_executable(public_kernel_probe EXCLUDE_FROM_ALL
+  probes/public_kernel_probe.cu
+  kernels/position_embeddings.cu
+  kernels/activations.cu
+)
+target_include_directories(public_kernel_probe PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(public_kernel_probe PRIVATE CUDA::cudart)
+set_target_properties(public_kernel_probe PROPERTIES
+  CUDA_ARCHITECTURES "${IDA_NATIVE_CUDA_ARCHITECTURES}"
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin"
+)
+
 # ── Cross-backend numerical parity harness (Phase 4, 2026-07-22) ────────────
 #
 # Previously a fully manual tool (hand-run nvcc against the main target's
@@ -173,6 +229,8 @@ add_executable(moe_router_parity_check
   kernels/cross_entropy.cu
   kernels/fp8.cu
   kernels/embedding.cu
+  kernels/position_embeddings.cu
+  kernels/activations.cu
   kernels/rmsnorm.cu
   kernels/lion.cu
   kernels/attention.cu
