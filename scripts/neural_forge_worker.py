@@ -40,6 +40,7 @@ try:
     )
     from scripts.model_contracts import (
         ModelContractError,
+        contract_is_experimental,
         validate_model_contract_id,
         validate_model_shape,
     )
@@ -64,7 +65,7 @@ except ModuleNotFoundError:
         validate_private_runtime_binding,
         validate_execution_attestation,
     )
-    from model_contracts import ModelContractError, validate_model_contract_id, validate_model_shape
+    from model_contracts import ModelContractError, contract_is_experimental, validate_model_contract_id, validate_model_shape
     from private_runtime import PrivateRuntimeError, validate_optional_private_runtime
     from local_receipt import LocalReceiptError, LocalRunReceiptStore, canonical_fingerprint
     from hardware_identity import probe_hardware
@@ -454,6 +455,37 @@ def bound_asset(root: Path, entry: dict[str, str], label: str) -> Path:
     return resolved
 
 
+def resolve_private_runtime(
+    reference: dict[str, str] | None,
+    binding: dict[str, Any],
+    config: "WorkerConfig",
+    execution: dict[str, str],
+) -> dict[str, str] | None:
+    """Resolve and hash-pin a private package without exposing its path."""
+
+    if reference is None:
+        return None
+    if config.private_runtime_root is None:
+        raise WorkerError("private runtime package root is not configured")
+    entries = binding.get("private_runtimes")
+    if not isinstance(entries, dict):
+        raise WorkerError("private runtime package is not locally approved")
+    entry = entries.get(reference["package_id"])
+    if not isinstance(entry, dict):
+        raise WorkerError("private runtime package is not locally approved")
+    if entry.get("sha256") != reference["package_sha256"]:
+        raise WorkerError("private runtime package attestation does not match the manifest")
+    if entry.get("binary_sha256") != execution["binary_sha256"]:
+        raise WorkerError("private runtime package is not bound to the approved binary")
+    bound_asset(config.private_runtime_root, entry, "private runtime package")
+    return {
+        "package_id": reference["package_id"],
+        "package_sha256": reference["package_sha256"],
+        "tier": reference["tier"],
+        "binary_sha256": entry["binary_sha256"],
+    }
+
+
 def utc_expiry(value: Any, label: str) -> datetime:
     if not isinstance(value, str):
         raise WorkerError(f"{label} is invalid")
@@ -689,8 +721,6 @@ def manifest_local_request(
     if execution["backend"] != profile["backend"]:
         raise WorkerError("execution attestation does not match profile")
     approved_contracts = profile.get("model_contract_ids", [])
-    if model_contract_id is not None and approved_contracts and model_contract_id not in approved_contracts:
-        raise WorkerError("model contract is not approved by the local profile")
     precision = profile_binding.get("precision")
     optimizer = profile_binding.get("optimizer")
     if not isinstance(optimizer, str) or optimizer.lower() in DISABLED_OPTIMIZERS:
@@ -699,6 +729,27 @@ def manifest_local_request(
         raise WorkerError("local profile settings are not approved")
 
     config_path = bound_asset(config.config_root, profile_binding, "profile config")
+    local_config = load_local_config(config_path)
+    declared_model_contract = local_config.get("model", {}).get("architecture_contract")
+    if model_contract_id is not None:
+        if declared_model_contract != model_contract_id:
+            raise WorkerError("local model architecture contract does not match manifest")
+    elif declared_model_contract is not None:
+        try:
+            model_contract_id = validate_model_contract_id(
+                declared_model_contract, "local model architecture_contract"
+            )
+            validate_model_contract_binding(model_contract_id, profile_id, mapping)
+        except (ModelContractError, DeploymentMapError) as exc:
+            raise WorkerError(str(exc)) from exc
+    if model_contract_id is not None and approved_contracts and model_contract_id not in approved_contracts:
+        raise WorkerError("model contract is not approved by the local profile")
+    if model_contract_id is not None and contract_is_experimental(model_contract_id):
+        if profile["channel"] != "experimental" and not config.allow_experimental:
+            raise WorkerError("experimental model contract requires explicit local acknowledgement")
+    private_runtime_package = resolve_private_runtime(
+        private_runtime, binding, config, execution
+    )
     dataset_entry = binding["datasets"].get(dataset_id)
     if dataset_entry is None:
         raise WorkerError("dataset is not locally approved")
@@ -730,7 +781,7 @@ def manifest_local_request(
         entry = binding["models"].get(request["base_model_id"])
         if entry is None:
             raise WorkerError("base model is not locally approved")
-        if model_contract_id is not None and entry.get("contract_id") not in {None, model_contract_id}:
+        if model_contract_id is not None and entry.get("contract_id") != model_contract_id:
             raise WorkerError("base model contract does not match manifest")
         local_request["init_from_model_ref"] = bound_asset(
             config.artifact_root, entry, "base model"
@@ -739,7 +790,7 @@ def manifest_local_request(
         entry = binding["checkpoints"].get(request["checkpoint_id"])
         if entry is None:
             raise WorkerError("checkpoint is not locally approved")
-        if model_contract_id is not None and entry.get("contract_id") not in {None, model_contract_id}:
+        if model_contract_id is not None and entry.get("contract_id") != model_contract_id:
             raise WorkerError("checkpoint contract does not match manifest")
         local_request["resume_from_ref"] = bound_asset(
             config.artifact_root, entry, "checkpoint"
@@ -759,6 +810,7 @@ def manifest_local_request(
         "kernel_source": kernel_source,
         "model_contract_id": model_contract_id,
         "private_runtime": private_runtime,
+        "private_runtime_package": private_runtime_package,
     }
 
 
@@ -792,6 +844,8 @@ def native_request_file(
     model_contract_id = request.get("model_contract_id") or native["model"].get("architecture_contract")
     if model_contract_id is not None:
         try:
+            if native["model"].get("architecture_contract") != model_contract_id:
+                raise ModelContractError("local model architecture_contract does not match contract")
             validate_model_shape(model_contract_id, native["model"])
         except ModelContractError as exc:
             raise WorkerError(str(exc)) from exc
@@ -972,6 +1026,7 @@ class WorkerConfig:
     artifact_root: Path
     run_root: Path
     kernel_root: Path | None = None
+    private_runtime_root: Path | None = None
     binary: Path | None = None
     binary_root: Path | None = None
     binding_path: Path | None = None
@@ -1048,6 +1103,8 @@ class WorkerConfig:
             object.__setattr__(self, field, getattr(self, field).resolve())
         if self.kernel_root is not None:
             object.__setattr__(self, "kernel_root", self.kernel_root.resolve())
+        if self.private_runtime_root is not None:
+            object.__setattr__(self, "private_runtime_root", self.private_runtime_root.resolve())
         if self.binary is not None:
             object.__setattr__(self, "binary", self.binary.resolve())
         binary_root = self.binary_root
@@ -1188,6 +1245,9 @@ def build_command(job: dict[str, Any], config: WorkerConfig) -> tuple[list[str],
     approved_kernel_source = resolved["kernel_source"]
     binding = resolved["binding"]
     local_device = resolved["device"]
+    verified_private_runtime = resolved["private_runtime_package"]
+    if resolved["private_runtime"] is not None and verified_private_runtime is None:
+        raise WorkerError("private runtime package could not be verified")
 
     output_path = run_output(config.run_root, run_id)
     if output_path.exists():
@@ -1591,6 +1651,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifact-root", type=Path, default=Path(os.environ.get("NEURAL_FORGE_ARTIFACT_ROOT", "artifacts")))
     parser.add_argument("--run-root", type=Path, default=Path(os.environ.get("NEURAL_FORGE_RUN_ROOT", "runs")))
     parser.add_argument("--kernel-root", type=Path, default=Path(os.environ.get("NEURAL_FORGE_KERNEL_ROOT", "artifacts/kernels")))
+    parser.add_argument("--private-runtime-root", type=Path, default=None)
     parser.add_argument("--binding", type=Path, default=Path(os.environ.get("NEURAL_FORGE_LOCAL_BINDING", "configs/local/neural-forge-binding.json")))
     parser.add_argument("--catalog", type=Path, default=Path(os.environ.get("NEURAL_FORGE_CAPABILITY_CATALOG", "configs/public/capabilities.json")))
     parser.add_argument("--deployment-map", type=Path, default=Path(os.environ.get("NEURAL_FORGE_DEPLOYMENT_MAP", "configs/local/neural-forge-deployment-map.json")))
@@ -1629,6 +1690,10 @@ def main() -> int:
             artifact_root=args.artifact_root,
             run_root=args.run_root,
             kernel_root=args.kernel_root,
+            private_runtime_root=args.private_runtime_root or (
+                Path(os.environ["NEURAL_FORGE_PRIVATE_RUNTIME_ROOT"])
+                if os.environ.get("NEURAL_FORGE_PRIVATE_RUNTIME_ROOT") else None
+            ),
             binary=args.binary,
             binding_path=args.binding,
             catalog_path=args.catalog,

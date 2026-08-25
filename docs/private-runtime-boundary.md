@@ -18,6 +18,15 @@ can use it. A different package ID or digest fails closed. The Hub coordinates
 the reference; the local worker resolves the actual private package through
 ignored machine-local bindings.
 
+The local binding may contain a `private_runtimes` collection keyed by package
+ID. Each entry contains only a relative package reference, the package
+SHA-256, and the SHA-256 of the approved binary it is bound to. Set
+`NEURAL_FORGE_PRIVATE_RUNTIME_ROOT` (or pass `--private-runtime-root`) to the
+ignored machine-local package directory. Before launch, the worker hashes the
+package, checks the manifest digest, and checks the package-to-binary binding.
+The resolved path never enters the Hub manifest, public event, receipt, or
+native request.
+
 ## Model contracts
 
 Model contract IDs are compatibility claims with an evidence tier, not model

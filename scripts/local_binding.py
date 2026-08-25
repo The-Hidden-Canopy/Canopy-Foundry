@@ -104,6 +104,18 @@ def _model_entry(value: Any, label: str) -> dict[str, str]:
     return result
 
 
+def _private_runtime_entry(value: Any, label: str) -> dict[str, str]:
+    entry = _record(value, label)
+    allowed = {"ref", "sha256", "binary_sha256"}
+    if set(entry) != allowed:
+        raise BindingError(f"{label} fields are invalid")
+    return {
+        "ref": _relative_ref(entry["ref"], f"{label}.ref"),
+        "sha256": _sha256(entry["sha256"], f"{label}.sha256"),
+        "binary_sha256": _sha256(entry["binary_sha256"], f"{label}.binary_sha256"),
+    }
+
+
 def _profile_entry(value: Any, label: str) -> dict[str, str]:
     entry = _record(value, label)
     allowed = {"ref", "sha256", "precision", "optimizer", "kernel_ref"}
@@ -201,7 +213,7 @@ def load_local_binding(path: Path) -> dict[str, Any]:
         "schema_version", "catalog_version", "catalog_sha256", "profiles",
         "datasets", "models", "checkpoints", "binaries",
     }
-    allowed = required | {"hardware_probes"}
+    allowed = required | {"hardware_probes", "private_runtimes"}
     if set(payload) - allowed:
         raise BindingError("local binding fields are invalid")
     result = {
@@ -216,6 +228,11 @@ def load_local_binding(path: Path) -> dict[str, Any]:
             _id(key, f"{collection} id"): entry_loader(value, f"{collection}.{key}")
             for key, value in raw.items()
         }
+    raw_private_runtimes = _record(payload.get("private_runtimes", {}), "local binding private_runtimes")
+    result["private_runtimes"] = {
+        _id(key, f"private_runtimes id"): _private_runtime_entry(value, f"private_runtimes.{key}")
+        for key, value in raw_private_runtimes.items()
+    }
     if "hardware_probes" in payload:
         raw_probes = _record(payload["hardware_probes"], "local binding hardware_probes")
         if set(raw_probes) - {"nvidia", "amd"}:

@@ -164,6 +164,38 @@ class PublicBoundaryTests(unittest.TestCase):
         self.assertTrue(any("private/generated path is publishable" in item for item in findings))
         self.assertTrue(any("private kernel instruction" in item for item in findings))
 
+    def test_history_mode_rejects_reachable_private_source_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "configs" / "public").mkdir(parents=True)
+            (root / "configs" / "public" / "capabilities.json").write_text(
+                json.dumps({
+                    "profiles": {
+                        "cpu-smoke": {
+                            "backend": "cpu",
+                            "enabled": False,
+                            "supported_optimizers": [],
+                        }
+                    }
+                }),
+                encoding="utf-8",
+            )
+            private = root / "kernels" / "attention_wgmma.cu"
+            private.parent.mkdir()
+            private.write_text("private", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "boundary-test"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "boundary@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "--all"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "--quiet", "-m", "fixture"], check=True)
+            private.unlink()
+            findings = check_boundary(root, include_history=True)
+
+        self.assertIn(
+            "private/generated path is reachable in Git history: kernels/attention_wgmma.cu",
+            findings,
+        )
+
     def test_ignored_cache_git_metadata_does_not_fail_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

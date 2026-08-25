@@ -58,3 +58,14 @@ It checks the public working tree for nested repositories, private paths,
 generated artifacts, raw telemetry, credentials, absolute machine paths, and
 direct blackboard dependencies. A clean result is necessary but does not
 replace review of the staged file list.
+
+Before publishing a repository that has ever contained private source, also
+run:
+
+```sh
+python scripts/check_public_boundary.py --history
+```
+
+History mode rejects private/generated source paths reachable from local Git
+refs. A clean working tree alone is not evidence that old public commits are
+safe to expose.

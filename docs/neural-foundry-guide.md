@@ -393,9 +393,21 @@ the references are relative to the roots passed above:
     "cuda": { "ref": "ida_native_train", "sha256": "<sha256 of the binary>" },
     "opencl": { "ref": "ida_native_opencl_train", "sha256": "<sha256 of the binary>" },
     "cpu": { "ref": "ida_native_cpu_train", "sha256": "<sha256 of the binary>" }
+  },
+  "private_runtimes": {
+    "nf-private-kernel-v1": {
+      "ref": "nf-private-kernel-v1.bundle",
+      "sha256": "<sha256 of the private package>",
+      "binary_sha256": "<sha256 of the approved binary>"
+    }
   }
 }
 ```
+
+`private_runtimes` is optional and is used only when the Hub manifest carries
+an approved private-runtime reference. The package file must live below the
+ignored `NEURAL_FORGE_PRIVATE_RUNTIME_ROOT`; package and binary hashes are
+checked before the native process is launched.
 
 ### Deployment-only profile mapping
 

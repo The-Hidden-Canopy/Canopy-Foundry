@@ -66,6 +66,7 @@ class ModelPortabilitySurfaceTests(unittest.TestCase):
         cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         self.assertIn("IDA_NATIVE_ENABLE_ADAMW=0", cmake)
         self.assertNotIn("  kernels/adamw.cu", cmake)
+        self.assertFalse((ROOT / "kernels" / "adamw.cu").exists())
 
 
 if __name__ == "__main__":

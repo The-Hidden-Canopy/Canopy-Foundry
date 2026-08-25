@@ -65,6 +65,20 @@ class PrivateBoundaryTests(unittest.TestCase):
             self.assertNotIn("path", receipt)
             self.assertNotIn("source", receipt)
 
+    def test_local_receipt_rejects_a_symlinked_receipt_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "runs"
+            target = Path(temporary) / "redirected"
+            target.mkdir()
+            root.mkdir()
+            try:
+                (root / ".receipts").symlink_to(target, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("symbolic-link creation is unavailable")
+            store = LocalRunReceiptStore(root)
+            with self.assertRaisesRegex(LocalReceiptError, "receipt directory"):
+                store.claim("nf-symlink12345678", {"request": {"profile": "cuda-local"}})
+
 
 if __name__ == "__main__":
     unittest.main()

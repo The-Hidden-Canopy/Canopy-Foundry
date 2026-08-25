@@ -203,6 +203,15 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
+    def set_profile_architecture_contract(self, contract_id: str) -> None:
+        config_path = self.config.config_root / "examples" / "small.json"
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+        payload.setdefault("model", {})["architecture_contract"] = contract_id
+        config_path.write_text(json.dumps(payload), encoding="utf-8")
+        binding = json.loads(self.binding_path.read_text(encoding="utf-8"))
+        binding["profiles"]["cuda-local"]["sha256"] = file_sha256(config_path)
+        self.binding_path.write_text(json.dumps(binding), encoding="utf-8")
+
     def test_local_refs_reject_absolute_and_traversal_paths(self) -> None:
         with self.assertRaises(WorkerError):
             relative_ref(self.root, "../../secrets", "dataset_ref")
@@ -1235,6 +1244,7 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
             output.rmdir()
 
     def test_model_contract_is_bound_to_the_deployment_map(self) -> None:
+        self.set_profile_architecture_contract("hf_gpt2_native_v1")
         deployment = json.loads(self.deployment_map_path.read_text(encoding="utf-8"))
         deployment["hub_profiles"]["cuda-local"]["model_contract_ids"] = ["hf_gpt2_native_v1"]
         self.deployment_map_path.write_text(json.dumps(deployment), encoding="utf-8")
@@ -1252,11 +1262,53 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
         with self.assertRaises(WorkerError):
             build_command(job, self.config)
 
+    def test_model_contract_is_required_on_local_parent_bindings(self) -> None:
+        self.set_profile_architecture_contract("hf_gpt2_native_v1")
+        model_path = self.config.artifact_root / "models" / "model-001.bin"
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        model_path.write_bytes(b"model-bytes")
+        binding = json.loads(self.binding_path.read_text(encoding="utf-8"))
+        binding["models"] = {
+            "model-001": {
+                "ref": "models/model-001.bin",
+                "sha256": file_sha256(model_path),
+            }
+        }
+        self.binding_path.write_text(json.dumps(binding), encoding="utf-8")
+        job = self.manifest_job(
+            run_id="nf-parentcontract1234",
+            base_model_id="model-001",
+            request_overrides={"model_contract_id": "hf_gpt2_native_v1"},
+        )
+        job["worker_manifest"]["policy"]["model_contract_id"] = "hf_gpt2_native_v1"
+        job["worker_manifest"]["lineage"]["reproducibility"]["model_contract_id"] = "hf_gpt2_native_v1"
+        with self.assertRaisesRegex(WorkerError, "base model contract"):
+            build_command(job, self.config)
+
+        binding["models"]["model-001"]["contract_id"] = "hf_gpt2_native_v1"
+        self.binding_path.write_text(json.dumps(binding), encoding="utf-8")
+        command, _ = build_command(job, self.config)
+        self.assertIn("--request-json", command)
+
     def test_private_runtime_is_an_opaque_local_binding_not_a_download(self) -> None:
         deployment = json.loads(self.deployment_map_path.read_text(encoding="utf-8"))
+        private_root = self.root / "private-runtime"
+        private_root.mkdir(parents=True, exist_ok=True)
+        package_path = private_root / "nf-private-kernel-v1.bundle"
+        package_path.write_bytes(b"deployment-owned-private-package")
+        package_sha256 = file_sha256(package_path)
+        binding = json.loads(self.binding_path.read_text(encoding="utf-8"))
+        binding["private_runtimes"] = {
+            "nf-private-kernel-v1": {
+                "ref": package_path.name,
+                "sha256": package_sha256,
+                "binary_sha256": file_sha256(self.binary_path),
+            }
+        }
+        self.binding_path.write_text(json.dumps(binding), encoding="utf-8")
         private_runtime = {
             "package_id": "nf-private-kernel-v1",
-            "package_sha256": "b" * 64,
+            "package_sha256": package_sha256,
             "tier": "private_advanced",
         }
         deployment["hub_profiles"]["cuda-local"]["private_runtime"] = private_runtime
@@ -1265,7 +1317,8 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
             run_id="nf-private12345678",
             policy_overrides={"private_runtime": private_runtime},
         )
-        command, _ = build_command(job, self.config)
+        config = replace(self.config, private_runtime_root=private_root)
+        command, _ = build_command(job, config)
         self.assertIn("--request-json", command)
 
         job["worker_manifest"]["policy"]["private_runtime"] = {
@@ -1273,7 +1326,47 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
             "package_sha256": "c" * 64,
         }
         with self.assertRaises(WorkerError):
+            build_command(job, config)
+
+        binding["private_runtimes"] = {}
+        self.binding_path.write_text(json.dumps(binding), encoding="utf-8")
+        job["worker_manifest"]["policy"]["private_runtime"] = private_runtime
+        with self.assertRaisesRegex(WorkerError, "not locally approved"):
+            build_command(job, config)
+
+    def test_experimental_model_contract_requires_explicit_local_acknowledgement(self) -> None:
+        config_path = self.config.config_root / "examples" / "experimental-moe.json"
+        config_path.write_text(json.dumps({
+            "required_arch": "sm_90",
+            "attention_backend": "scalar_flash",
+            "model": {
+                "architecture_contract": "generic_moe_native_v1",
+                "hidden_size": 128,
+                "intermediate_size": 512,
+                "layers": 2,
+                "heads": 4,
+                "vocab_size": 4096,
+            },
+            "training": {"microbatch": 1, "grad_accumulation": 1, "max_steps": 1},
+            "input": {"batch_size": 1, "sequence_length": 2048},
+        }), encoding="utf-8")
+        binding = json.loads(self.binding_path.read_text(encoding="utf-8"))
+        binding["profiles"]["cuda-local"]["ref"] = "examples/experimental-moe.json"
+        binding["profiles"]["cuda-local"]["sha256"] = file_sha256(config_path)
+        self.binding_path.write_text(json.dumps(binding), encoding="utf-8")
+        deployment = json.loads(self.deployment_map_path.read_text(encoding="utf-8"))
+        deployment["hub_profiles"]["cuda-local"]["model_contract_ids"] = ["generic_moe_native_v1"]
+        self.deployment_map_path.write_text(json.dumps(deployment), encoding="utf-8")
+        job = self.manifest_job(
+            run_id="nf-experimental123456",
+            request_overrides={"model_contract_id": "generic_moe_native_v1"},
+        )
+        job["worker_manifest"]["policy"]["model_contract_id"] = "generic_moe_native_v1"
+        job["worker_manifest"]["lineage"]["reproducibility"]["model_contract_id"] = "generic_moe_native_v1"
+        with self.assertRaisesRegex(WorkerError, "experimental model contract"):
             build_command(job, self.config)
+        command, _ = build_command(job, replace(self.config, allow_experimental=True))
+        self.assertIn("--request-json", command)
 
     def test_qwen_shared_expert_shape_is_not_claimed_by_generic_moe_contract(self) -> None:
         config_path = self.config.config_root / "examples" / "shared-moe.json"
@@ -1309,7 +1402,7 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
         job["worker_manifest"]["policy"]["model_contract_id"] = "generic_moe_native_v1"
         job["worker_manifest"]["lineage"]["reproducibility"]["model_contract_id"] = "generic_moe_native_v1"
         with self.assertRaisesRegex(WorkerError, "shared-expert"):
-            build_command(job, self.config)
+            build_command(job, replace(self.config, allow_experimental=True))
 
 
 if __name__ == "__main__":

@@ -99,6 +99,31 @@ def _git_index_files(root: Path) -> set[str]:
     }
 
 
+def _git_history_paths(root: Path) -> list[str]:
+    result = subprocess.run(
+        [
+            "git",
+            "-c",
+            "safe.directory=*",
+            "-C",
+            str(root),
+            "rev-list",
+            "--objects",
+            "--all",
+        ],
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        return []
+    paths: list[str] = []
+    for line in result.stdout.decode("utf-8", errors="replace").splitlines():
+        _object_id, separator, path = line.partition(" ")
+        if separator and path:
+            paths.append(path.replace("\\", "/"))
+    return paths
+
+
 def _decode_text(data: bytes) -> str | None:
     if b"\0" in data or len(data) > 8 * 1024 * 1024:
         return None
@@ -188,7 +213,7 @@ def _content_findings(relative: str, text: str, source: str = "") -> list[str]:
     ]
 
 
-def check_boundary(root: Path = ROOT) -> list[str]:
+def check_boundary(root: Path = ROOT, *, include_history: bool = False) -> list[str]:
     findings: list[str] = []
     files = _git_files(root)
     index_files = _git_index_files(root)
@@ -210,6 +235,11 @@ def check_boundary(root: Path = ROOT) -> list[str]:
                 findings.extend(_content_findings(relative, index_text, "staged index"))
 
     findings.extend(f"nested Git metadata: {path}" for path in _nested_git_metadata(root))
+
+    if include_history:
+        for relative in sorted(set(_git_history_paths(root))):
+            if any(pattern.search(relative) for pattern in _FORBIDDEN_PATH):
+                findings.append(f"private/generated path is reachable in Git history: {relative}")
 
     catalog_path = root / "configs" / "public" / "capabilities.json"
     try:
@@ -237,9 +267,14 @@ def check_boundary(root: Path = ROOT) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=ROOT)
+    parser.add_argument(
+        "--history",
+        action="store_true",
+        help="also inspect paths reachable from all local Git refs",
+    )
     args = parser.parse_args()
     root = args.root.resolve()
-    findings = check_boundary(root)
+    findings = check_boundary(root, include_history=args.history)
     if findings:
         print("PUBLIC BOUNDARY: FAIL")
         for finding in findings:

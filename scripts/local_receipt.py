@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import tempfile
 from typing import Any
 
@@ -45,6 +46,15 @@ class LocalRunReceiptStore:
     def _path(self, run_id: str) -> Path:
         return self.receipt_root / f"{_safe_run_id(run_id)}.json"
 
+    def _ensure_receipt_root(self) -> None:
+        try:
+            self.receipt_root.mkdir(parents=True, exist_ok=True)
+            mode = os.lstat(self.receipt_root).st_mode
+        except OSError as exc:
+            raise LocalReceiptError("local receipt directory is unavailable") from exc
+        if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+            raise LocalReceiptError("local receipt directory cannot be a symbolic link")
+
     def _read(self, path: Path) -> dict[str, Any] | None:
         try:
             if path.is_symlink():
@@ -68,7 +78,7 @@ class LocalRunReceiptStore:
             raise LocalReceiptError("manifest is invalid")
         fingerprint = canonical_fingerprint(manifest)
         path = self._path(run_id)
-        self.receipt_root.mkdir(parents=True, exist_ok=True)
+        self._ensure_receipt_root()
         record = {
             "schema_version": RECEIPT_SCHEMA_VERSION,
             "run_id": run_id,
@@ -118,7 +128,7 @@ class LocalRunReceiptStore:
         return updated
 
     def _write(self, path: Path, payload: dict[str, Any]) -> None:
-        self.receipt_root.mkdir(parents=True, exist_ok=True)
+        self._ensure_receipt_root()
         temporary: str | None = None
         try:
             with tempfile.NamedTemporaryFile(
