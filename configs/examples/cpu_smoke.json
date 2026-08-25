@@ -1,0 +1,21 @@
+{
+  "required_arch": "host",
+  "attention_backend": "scalar_flash",
+  "model": {
+    "hidden_size": 32,
+    "intermediate_size": 128,
+    "layers": 1,
+    "heads": 1,
+    "vocab_size": 256
+  },
+  "training": {
+    "microbatch": 1,
+    "grad_accumulation": 1,
+    "learning_rate": 0.0003,
+    "max_steps": 3
+  },
+  "input": {
+    "batch_size": 1,
+    "sequence_length": 2048
+  }
+}

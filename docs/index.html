@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Neural Foundry | Canopy Foundry</title>
+  <meta name="description" content="Neural Foundry is the native C++ training runtime for the Hidden Canopy AI stack, with CUDA and explicit portable smoke backends." />
+  <style>
+    :root { color-scheme: dark; --bg: #0c1210; --panel: #17221d; --text: #eee4cf; --muted: #d7cdb8; --gold: #c6a567; --line: rgba(198,165,103,.3); }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; color: var(--text); background: radial-gradient(circle at 15% 5%, rgba(127,163,108,.16), transparent 30rem), var(--bg); font: 1rem/1.65 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { width: min(100% - 2rem, 60rem); margin: 0 auto; padding: 5rem 0; }
+    .eyebrow { color: var(--gold); font-size: .75rem; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; }
+    h1, h2 { font-family: Georgia, "Times New Roman", serif; font-weight: 500; line-height: 1.1; }
+    h1 { max-width: 48rem; margin: .6rem 0 1.2rem; font-size: clamp(2.8rem, 8vw, 5.8rem); letter-spacing: -.05em; }
+    h2 { margin-top: 0; font-size: clamp(2rem, 5vw, 3.3rem); }
+    p { color: var(--muted); max-width: 48rem; }
+    section { margin-top: 4rem; }
+    .panel { padding: 2rem; border: 1px solid var(--line); border-radius: 1.25rem; background: rgba(23,34,29,.9); }
+    a { color: var(--gold); }
+    footer { width: min(100% - 2rem, 60rem); margin: 0 auto; padding: 0 0 3rem; color: #9fa99f; font-size: .85rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">Native training runtime</div>
+    <h1>Neural Foundry makes training infrastructure inspectable.</h1>
+    <p>Neural Foundry is the native C++ runtime for the Hidden Canopy AI stack. It provides a reusable trainer library, a full CUDA target, and explicit AMD OpenCL and CPU smoke targets for hardware-aware research runs.</p>
+
+    <section class="panel">
+      <h2>Explicit boundaries</h2>
+      <p>The runtime owns native training capability: request validation, backend kernels, optimizer execution, checkpoints where supported, and structured progress output. It does not own HTTP APIs, authentication, organization or role handling, audit or promotion logic, dashboards, datasets, model weights, or Python orchestration. Those concerns remain in the governed external wrapper and control plane.</p>
+      <p>That separation keeps hardware optimizations measurable and keeps a training artifact from becoming an automatic production decision.</p>
+    </section>
+
+  </main>
+  <footer>Canopy Foundry · <a href="https://github.com/The-Hidden-Canopy/Canopy-Foundry">Source repository</a></footer>
+</body>
+</html>

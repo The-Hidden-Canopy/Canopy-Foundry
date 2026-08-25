@@ -1,0 +1,27 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "public-cpu",
+      "displayName": "Public CPU portability build",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/public-cpu",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "IDA_NATIVE_ENABLE_CUDA": "OFF",
+        "IDA_NATIVE_ENABLE_AMD": "ON",
+        "IDA_NATIVE_AMD_ENABLE_OPENCL": "OFF",
+        "IDA_NATIVE_AMD_ENABLE_CPU": "ON",
+        "IDA_NATIVE_ENABLE_PRIVATE_OBSERVABILITY": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "public-cpu",
+      "configurePreset": "public-cpu",
+      "configuration": "Release",
+      "targets": ["ida_native_cpu_train"]
+    }
+  ]
+}

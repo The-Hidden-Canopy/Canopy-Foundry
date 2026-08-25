@@ -1,0 +1,39 @@
+{
+  "schema_version": "neural-foundry-capability-catalog.v1",
+  "catalog_version": "catalog-2026-08-23-public-blank",
+  "profiles": {
+    "cuda-local": {
+      "channel": "stable",
+      "backend": "cuda",
+      "artifact_id": "canopy-foundry-cuda-v1",
+      "binary_names": ["ida_native_train"],
+      "supported_precisions": ["fp32", "legacy_bf16", "legacy_fp8"],
+      "supported_optimizers": ["lion"],
+      "supported_attention": ["scalar_flash"],
+      "model_contract_ids": ["hf_gpt2_native_v1", "ida_lattice_native_v1", "generic_moe_native_v1"]
+    },
+    "opencl-smoke": {
+      "enabled": false,
+      "channel": "experimental",
+      "backend": "opencl",
+      "artifact_id": "canopy-foundry-opencl-smoke-v1",
+      "binary_names": ["ida_native_opencl_train"],
+      "kernel_sha256": "69859ccdad23814d3e1c98fc6e994d795e4632f6c05278d7fa7dd013cd08f021",
+      "supported_precisions": ["fp32"],
+      "supported_optimizers": [],
+      "supported_attention": ["scalar_flash"],
+      "model_contract_ids": ["ida_lattice_native_v1"]
+    },
+    "cpu-smoke": {
+      "enabled": false,
+      "channel": "experimental",
+      "backend": "cpu",
+      "artifact_id": "canopy-foundry-cpu-smoke-v1",
+      "binary_names": ["ida_native_cpu_train"],
+      "supported_precisions": ["fp32"],
+      "supported_optimizers": [],
+      "supported_attention": ["scalar_flash"],
+      "model_contract_ids": ["ida_lattice_native_v1"]
+    }
+  }
+}

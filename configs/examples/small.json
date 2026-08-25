@@ -1,0 +1,20 @@
+{
+  "required_arch": "sm_90",
+  "model": {
+    "hidden_size": 128,
+    "intermediate_size": 512,
+    "layers": 2,
+    "heads": 4,
+    "vocab_size": 32000
+  },
+  "training": {
+    "microbatch": 1,
+    "grad_accumulation": 1,
+    "learning_rate": 0.0003,
+    "max_steps": 1
+  },
+  "input": {
+    "batch_size": 1,
+    "sequence_length": 2048
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "required_arch": "sm_90",
+  "attention_backend": "scalar_flash",
+  "precision_profile": "legacy_bf16",
+  "model": {
+    "architecture_contract": "hf_gpt2_native_v1",
+    "hidden_size": 128,
+    "intermediate_size": 512,
+    "layers": 2,
+    "heads": 4,
+    "kv_heads": 4,
+    "vocab_size": 4096,
+    "normalization_type": "layernorm",
+    "activation_type": "gelu_new",
+    "position_embedding_type": "learned_absolute",
+    "norm_eps": 0.00001,
+    "max_position_embeddings": 2048,
+    "qkv_bias": true,
+    "projection_bias": true,
+    "tied_embeddings": true
+  },
+  "training": {
+    "microbatch": 1,
+    "grad_accumulation": 1,
+    "learning_rate": 0.0003,
+    "max_steps": 1
+  },
+  "input": {
+    "batch_size": 1,
+    "sequence_length": 2048
+  }
+}
