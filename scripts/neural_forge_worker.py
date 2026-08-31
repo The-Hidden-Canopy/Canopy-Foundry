@@ -125,6 +125,8 @@ NATIVE_TRAINING_FIELDS = {
 NATIVE_INPUT_FIELDS = {"token_blocks", "label_blocks", "seg_blocks", "batch_size", "sequence_length", "shape"}
 TRAINING_MODES = {"from_scratch", "fine_tune", "resume"}
 DISABLED_OPTIMIZERS = {"adam", "adamw"}
+V3_METRIC_BACKENDS = {"cuda": "native", "cpu": "native_cpu", "opencl": "native_opencl"}
+V3_NATIVE_EXPECTED_PHASE = "native_smoke_complete"
 OPAQUE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 RESERVED_IDS = {"__proto__", "prototype", "constructor"}
@@ -995,15 +997,17 @@ def native_request_file(
         if training.get("max_steps", 1) <= 0 or training.get("grad_accumulation", 1) <= 0:
             raise WorkerError("training limits are invalid")
     native["backend"] = "native"
-    native["job_id"] = run_id
     native["precision_profile"] = precision.strip()
     native["optimizer_type"] = optimizer
     native["output_dir"] = str(output_path)
-    # The canonical CUDA binary reports completion through its status file;
-    # keep all engine-owned evidence inside this run's private directory.
-    native["status_file"] = str(output_path / "status.json")
-    native["repo_root"] = str(output_path)
-    native.setdefault("expected_terminal_phase", "native_smoke_complete")
+    if native_execution is None:
+        # The public Foundry binary owns these supervisor paths.  V3's native
+        # parser deliberately rejects them so a private V3 request cannot
+        # inherit Foundry orchestration state as if it were engine input.
+        native["job_id"] = run_id
+        native["status_file"] = str(output_path / "status.json")
+        native["repo_root"] = str(output_path)
+        native.setdefault("expected_terminal_phase", V3_NATIVE_EXPECTED_PHASE)
 
     max_steps = request.get("max_steps")
     if max_steps is not None:
@@ -1367,6 +1371,7 @@ def completed_metrics(
     run_id: str,
     expected_phase: str,
     backend: str,
+    v3_native: bool = False,
 ) -> bool:
     metric_backend = {"cpu": "native_cpu", "opencl": "native_opencl"}.get(backend)
     for filename in ("metrics.json", "status.json"):
@@ -1376,6 +1381,29 @@ def completed_metrics(
             continue
         if not isinstance(payload, dict):
             continue
+        if (
+            filename == "metrics.json"
+            and v3_native
+            and payload.get("backend") == V3_METRIC_BACKENDS.get(backend)
+            and payload.get("type") == "complete"
+            and payload.get("status") == "complete"
+            and isinstance(payload.get("checkpoint_written"), bool)
+            and (
+                (
+                    backend in {"cpu", "opencl"}
+                    and "output" not in payload
+                )
+                or _same_output_path(payload.get("output"), output_path)
+            )
+            and (
+                backend != "cuda"
+                or (
+                    payload.get("checkpoint_written") is True
+                    and (output_path / "model.safetensors").is_file()
+                )
+            )
+        ):
+            return True
         if (
             filename == "metrics.json"
             and metric_backend is not None
@@ -1396,6 +1424,17 @@ def completed_metrics(
         ):
             return True
     return False
+
+
+def _same_output_path(value: Any, output_path: Path) -> bool:
+    """Compare a native-reported output path to the worker-owned run root."""
+
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        return Path(value).resolve() == output_path.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
 
 
 def optional_leaderboard_attestation(job: dict[str, Any], config: WorkerConfig) -> dict[str, str] | None:
@@ -1539,7 +1578,12 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
         native_request = json.loads(
             (output_path / "native-request.json").read_text(encoding="utf-8")
         )
-        expected_phase = native_request["expected_terminal_phase"]
+        v3_native = (output_path / "native-execution-request.json").is_file()
+        expected_phase = (
+            V3_NATIVE_EXPECTED_PHASE
+            if v3_native
+            else native_request["expected_terminal_phase"]
+        )
         backend = native_request["device"]["runtime"]
         if not isinstance(expected_phase, str) or not isinstance(backend, str):
             raise ValueError
@@ -1684,6 +1728,7 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
         run_id=run_id,
         expected_phase=expected_phase,
         backend=backend,
+        v3_native=v3_native,
     )
     checkpoint_written = (output_path / "model.safetensors").is_file()
     final_status = "succeeded" if process.returncode == 0 and metrics_available else "failed"

@@ -266,6 +266,8 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
         native_request = json.loads((output_path / "native-request.json").read_text(encoding="utf-8"))
         self.assertEqual(native_request["optimizer_type"], "adamw")
         self.assertEqual(native_request["attention_backend"], "hopper_wgmma_packed_fp4")
+        for field in ("repo_root", "status_file", "job_id", "expected_terminal_phase"):
+            self.assertNotIn(field, native_request)
 
     def test_v3_native_contract_rejects_lion_or_scalar_translation(self) -> None:
         job = self.v3_native_job()
@@ -1131,6 +1133,69 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
         )
         (output / "model.safetensors").write_bytes(b"checkpoint")
         self.assertTrue(completed_metrics(output, run_id="nf-12345678", expected_phase="native_smoke_complete", backend="cuda"))
+
+    def test_completion_accepts_v3_native_receipts_for_each_backend(self) -> None:
+        for backend, metric_backend in (
+            ("cuda", "native"),
+            ("cpu", "native_cpu"),
+            ("opencl", "native_opencl"),
+        ):
+            with self.subTest(backend=backend):
+                output = self.config.run_root / f"nf-v3-{backend}123456"
+                output.mkdir(parents=True, exist_ok=True)
+                payload = {
+                    "type": "complete",
+                    "status": "complete",
+                    "backend": metric_backend,
+                    "checkpoint_written": backend == "cuda",
+                }
+                if backend == "cuda":
+                    payload["output"] = str(output.resolve())
+                    (output / "model.safetensors").write_bytes(b"checkpoint")
+                (output / "metrics.json").write_text(json.dumps(payload), encoding="utf-8")
+                self.assertTrue(
+                    completed_metrics(
+                        output,
+                        run_id=f"nf-v3-{backend}123456",
+                        expected_phase="native_smoke_complete",
+                        backend=backend,
+                        v3_native=True,
+                    )
+                )
+
+    def test_v3_cuda_receipt_requires_worker_owned_output_and_checkpoint(self) -> None:
+        output = self.config.run_root / "nf-v3-cuda123456"
+        output.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "type": "complete",
+            "status": "complete",
+            "backend": "native",
+            "checkpoint_written": True,
+            "output": str(self.root / "different-output"),
+        }
+        (output / "metrics.json").write_text(json.dumps(payload), encoding="utf-8")
+        (output / "model.safetensors").write_bytes(b"checkpoint")
+        self.assertFalse(
+            completed_metrics(
+                output,
+                run_id="nf-v3-cuda123456",
+                expected_phase="native_smoke_complete",
+                backend="cuda",
+                v3_native=True,
+            )
+        )
+        payload["output"] = str(output.resolve())
+        (output / "model.safetensors").unlink()
+        (output / "metrics.json").write_text(json.dumps(payload), encoding="utf-8")
+        self.assertFalse(
+            completed_metrics(
+                output,
+                run_id="nf-v3-cuda123456",
+                expected_phase="native_smoke_complete",
+                backend="cuda",
+                v3_native=True,
+            )
+        )
 
     def test_completion_rejects_a_different_run_identity(self) -> None:
         output = self.config.run_root / "nf-12345678"
