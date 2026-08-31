@@ -30,6 +30,8 @@ try:
     from scripts.compatibility import (
         BACKEND_POLICIES,
         MANIFEST_SCHEMA_VERSION,
+        project_v3_native_execution_request,
+        validate_v3_native_execution_request,
     )
     from scripts.deployment_map import (
         DeploymentMapError,
@@ -57,7 +59,12 @@ try:
 except ModuleNotFoundError:
     # Keep the documented `python scripts/neural_forge_worker.py` form
     # executable when Python places only the scripts directory on sys.path.
-    from compatibility import BACKEND_POLICIES, MANIFEST_SCHEMA_VERSION
+    from compatibility import (
+        BACKEND_POLICIES,
+        MANIFEST_SCHEMA_VERSION,
+        project_v3_native_execution_request,
+        validate_v3_native_execution_request,
+    )
     from deployment_map import (
         DeploymentMapError,
         load_deployment_map,
@@ -551,6 +558,8 @@ def manifest_local_request(
         "execution", "request", "authority", "policy", "lineage",
     }
     if not required_manifest_fields.issubset(manifest):
+        if manifest.get("schema_version") == MANIFEST_SCHEMA_VERSION:
+            raise WorkerError("worker manifest is not the canonical Hub/Foundry envelope")
         raise WorkerError("worker manifest is incomplete")
     if set(manifest) - {
         "schema_version", "run_id", "issued_at", "claimed_at", "deadline_at",
@@ -708,6 +717,18 @@ def manifest_local_request(
     if policy["trainer_version"] not in mapping["trainer_versions"]:
         raise WorkerError("worker manifest trainer version is not deployment-approved")
 
+    native_execution: dict[str, Any] | None = None
+    if mapping.get("native_execution") is not None:
+        try:
+            native_execution = project_v3_native_execution_request(
+                manifest,
+                profile_id=profile_id,
+                execution=execution,
+                native_contract=mapping["native_execution"],
+            )
+        except ValueError as exc:
+            raise WorkerError(str(exc)) from exc
+
     catalog, binding = verified_local_binding(config)
     local_profile_id = mapping["local_profile_id"]
     profile = catalog["profiles"].get(local_profile_id)
@@ -723,13 +744,25 @@ def manifest_local_request(
     approved_contracts = profile.get("model_contract_ids", [])
     precision = profile_binding.get("precision")
     optimizer = profile_binding.get("optimizer")
-    if not isinstance(optimizer, str) or optimizer.lower() in DISABLED_OPTIMIZERS:
-        raise WorkerError("Adam and AdamW optimizers are disabled")
-    if precision not in profile["supported_precisions"] or optimizer not in profile["supported_optimizers"]:
-        raise WorkerError("local profile settings are not approved")
+    if native_execution is None:
+        if not isinstance(optimizer, str) or optimizer.lower() in DISABLED_OPTIMIZERS:
+            raise WorkerError("Adam and AdamW optimizers are disabled")
+        if precision not in profile["supported_precisions"] or optimizer not in profile["supported_optimizers"]:
+            raise WorkerError("local profile settings are not approved")
+    elif (
+        precision != native_execution["precision_profile"]
+        or optimizer != native_execution["optimizer_type"]
+    ):
+        raise WorkerError("local profile settings do not match the V3 native contract")
 
     config_path = bound_asset(config.config_root, profile_binding, "profile config")
     local_config = load_local_config(config_path)
+    if (
+        native_execution is not None
+        and local_config.get("attention_backend", "scalar_flash")
+        != native_execution["attention_backend"]
+    ):
+        raise WorkerError("local profile attention does not match the V3 native contract")
     declared_model_contract = local_config.get("model", {}).get("architecture_contract")
     if model_contract_id is not None:
         if declared_model_contract != model_contract_id:
@@ -811,6 +844,7 @@ def manifest_local_request(
         "model_contract_id": model_contract_id,
         "private_runtime": private_runtime,
         "private_runtime_package": private_runtime_package,
+        "native_execution": native_execution,
     }
 
 
@@ -824,7 +858,13 @@ def native_request_file(
     run_id: str,
     approved_max_steps: int | None = None,
     approved_attention: list[str] | None = None,
+    native_execution: dict[str, Any] | None = None,
 ) -> Path:
+    native_execution = (
+        validate_v3_native_execution_request(native_execution, expected_run_id=run_id)
+        if native_execution is not None
+        else None
+    )
     config = load_local_config(config_path)
     unknown = set(config) - NATIVE_TOP_LEVEL_FIELDS - {"required_arch"}
     if unknown:
@@ -832,7 +872,10 @@ def native_request_file(
     native: dict[str, Any] = {
         key: config[key] for key in NATIVE_TOP_LEVEL_FIELDS if key in config
     }
-    native.setdefault("attention_backend", "scalar_flash")
+    native.setdefault(
+        "attention_backend",
+        native_execution["attention_backend"] if native_execution is not None else "scalar_flash",
+    )
     device = project_native_section(config, "device", NATIVE_DEVICE_FIELDS)
     if "required_arch" in config and "required_arch" not in device:
         device["required_arch"] = config["required_arch"]
@@ -873,16 +916,30 @@ def native_request_file(
     policy = BACKEND_POLICIES[backend]
     precision = request.get("precision")
     optimizer = request.get("optimizer")
-    if not isinstance(optimizer, str) or optimizer.lower() in DISABLED_OPTIMIZERS:
-        raise WorkerError("Adam and AdamW optimizers are disabled")
-    if not isinstance(precision, str) or precision.strip() not in policy.supported_precisions:
-        raise WorkerError("precision is invalid")
-    if optimizer not in policy.supported_optimizers:
-        raise WorkerError("native optimizer is invalid")
+    if native_execution is not None:
+        if (
+            backend != native_execution["backend"]
+            or precision != native_execution["precision_profile"]
+            or optimizer != native_execution["optimizer_type"]
+        ):
+            raise WorkerError("local request does not match the V3 native contract")
+        precision = native_execution["precision_profile"]
+        optimizer = native_execution["optimizer_type"]
+    else:
+        if not isinstance(optimizer, str) or optimizer.lower() in DISABLED_OPTIMIZERS:
+            raise WorkerError("Adam and AdamW optimizers are disabled")
+        if not isinstance(precision, str) or precision.strip() not in policy.supported_precisions:
+            raise WorkerError("precision is invalid")
+        if optimizer not in policy.supported_optimizers:
+            raise WorkerError("native optimizer is invalid")
     if native["attention_backend"] not in policy.supported_attention:
-        raise WorkerError("attention backend is invalid for selected backend")
+        if native_execution is None:
+            raise WorkerError("attention backend is invalid for selected backend")
+    if native_execution is not None and native["attention_backend"] != native_execution["attention_backend"]:
+        raise WorkerError("local config attention does not match the V3 native contract")
     if approved_attention is not None and native["attention_backend"] not in approved_attention:
-        raise WorkerError("attention backend is not approved for selected profile")
+        if native_execution is None:
+            raise WorkerError("attention backend is not approved for selected profile")
     native["device"]["runtime"] = backend
     default_arch = "gfx1036" if backend == "opencl" else "host" if backend == "cpu" else "sm_90"
     native["device"].setdefault("required_arch", default_arch)
@@ -969,6 +1026,13 @@ def native_request_file(
             native[native_field] = str(relative_ref(artifact_root, request[field], field))
 
     output_path.mkdir(parents=True, exist_ok=True)
+    if native_execution is not None:
+        try:
+            (output_path / "native-execution-request.json").write_text(
+                json.dumps(native_execution, indent=2) + "\n", encoding="utf-8"
+            )
+        except OSError as exc:
+            raise WorkerError("native execution request could not be recorded") from exc
     request_path = output_path / "native-request.json"
     try:
         request_path.write_text(json.dumps(native, indent=2) + "\n", encoding="utf-8")
@@ -1240,7 +1304,11 @@ def build_command(job: dict[str, Any], config: WorkerConfig) -> tuple[list[str],
     request, config_path, dataset_path, resolved = manifest_local_request(job, config)
     attestation = resolved["execution"]
     approved_max_steps = resolved["policy"]["max_steps"]
-    approved_attention = resolved["profile"]["supported_attention"]
+    approved_attention = (
+        [resolved["native_execution"]["attention_backend"]]
+        if resolved.get("native_execution") is not None
+        else resolved["profile"]["supported_attention"]
+    )
     approved_kernel_sha256 = resolved["kernel_sha256"]
     approved_kernel_source = resolved["kernel_source"]
     binding = resolved["binding"]
@@ -1280,6 +1348,7 @@ def build_command(job: dict[str, Any], config: WorkerConfig) -> tuple[list[str],
         run_id=run_id,
         approved_max_steps=approved_max_steps,
         approved_attention=approved_attention,
+        native_execution=resolved.get("native_execution"),
     )
     command = [
         str(binary),

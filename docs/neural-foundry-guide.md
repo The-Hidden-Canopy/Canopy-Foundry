@@ -422,10 +422,21 @@ The four public-model workloads are intentionally mapped one-to-one. The map
 must contain a separate local profile ID and execution allowlist for each
 enabled workload; duplicate local profile IDs fail closed. The map is a
 deployment-owned control file, not a public catalog, and contains no paths,
-model names, credentials, optimizer settings, precision, or checkpoints. The
-Hub manifest supplies only the external profile ID, dataset/model/checkpoint
-IDs, resource class, and justification. The worker resolves all remaining
-settings from its local catalog and binding.
+model names, credentials, or checkpoints. The Hub manifest supplies only the
+external profile ID, dataset/model/checkpoint IDs, resource class, and
+justification. The worker resolves all remaining settings from its local
+catalog and binding.
+
+The V3 integration is an explicit private exception to the public settings
+catalog, never an implicit translation. A deployment-owned entry may include
+an exact `native_execution` object with schema
+`ida-native-execution-request.v1`, the canonical V3 profile ID, backend,
+precision profile, optimizer, and attention backend. The local binding and
+config must match those values exactly, and its `execution` entry must pin
+`binary_sha256`. The worker then requires the Hub attestation, map pin, local
+binding, and measured binary hash to agree. A V3 profile that would otherwise
+require AdamW or WGMMA is rejected unless this private contract is present and
+matched. It is never downgraded to the public Lion/scalar route.
 
 The ignored deployment map contains IDs and execution allowlists only; it
 must not contain paths, commands, model bytes, credentials, or training
@@ -453,9 +464,38 @@ settings:
 
 Repeat the profile entry explicitly for every enabled external workload; a
 profile never inherits another profile's local config. A missing map entry,
-execution mismatch, trainer-version mismatch, invalid device, or missing
-local binding fails closed. Public model availability does not authorize the
-worker to send model bytes or filesystem paths to the Hub.
+execution mismatch, trainer-version mismatch, native-contract mismatch,
+invalid device, or missing local binding fails closed. Public model
+availability does not authorize the worker to send model bytes or filesystem
+paths to the Hub.
+
+For a V3 private entry, the additional map section is shaped like this (the
+binary digest must be replaced by the deployment's measured digest; the
+placeholder is intentionally not executable):
+
+```json
+{
+  "execution": {
+    "backend": "cuda",
+    "artifact_id": "ida-native-cuda-v3",
+    "binary_names": ["ida_native_train"],
+    "binary_sha256": "<sha256 of the approved V3 binary>"
+  },
+  "native_execution": {
+    "schema_version": "ida-native-execution-request.v1",
+    "profile_id": "edge-full",
+    "backend": "cuda",
+    "precision_profile": "legacy_bf16",
+    "optimizer_type": "adamw",
+    "attention_backend": "hopper_wgmma_packed_fp4"
+  }
+}
+```
+
+The worker records the validated native descriptor in the private run
+directory and separately writes the low-level request consumed by the native
+binary. Neither file is returned to the Hub; worker updates contain only the
+bounded public progress envelope.
 
 ### Use your own config, dataset, model, or checkpoint
 

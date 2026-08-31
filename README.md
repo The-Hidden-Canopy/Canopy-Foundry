@@ -6,6 +6,14 @@ models, checkpoints, configuration, and execution environment.
 The public repository contains the runtime capability. The Hidden Canopy Hub
 remains the authenticated coordination and authority layer.
 
+The Hub-to-worker integration accepts the canonical
+`neural-forge-worker-manifest.v2` envelope. A deployment can explicitly map a
+Hub profile to IDA Train v3 through a private
+`ida-native-execution-request.v1` contract in the deployment map. That private
+contract pins the V3 profile settings and, optionally, the binary digest; it
+does not alter the public capability catalog or translate AdamW/WGMMA requests
+to the public Lion/scalar route.
+
 ## Public Boundary and Runtime Hardening Update
 
 The current public release is commit [`145c7b2`](https://github.com/The-Hidden-Canopy/Canopy-Foundry/commit/145c7b2fe169c19726d0d92074925b87f7f39eb8).

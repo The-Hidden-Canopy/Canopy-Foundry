@@ -200,6 +200,81 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
             },
         }
 
+    def v3_native_job(self) -> dict[str, object]:
+        """Build a Hub-shaped job with an explicit private V3 deployment map."""
+
+        config_path = self.config.config_root / "examples" / "small.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config["attention_backend"] = "hopper_wgmma_packed_fp4"
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+
+        binding = json.loads(self.binding_path.read_text(encoding="utf-8"))
+        binding["profiles"]["cuda-local"].update({
+            "sha256": file_sha256(config_path),
+            "precision": "legacy_bf16",
+            "optimizer": "adamw",
+        })
+        self.binding_path.write_text(json.dumps(binding), encoding="utf-8")
+
+        binary_sha256 = file_sha256(self.binary_path)
+        self.deployment_map_path.write_text(json.dumps({
+            "schema_version": DEPLOYMENT_MAP_SCHEMA_VERSION,
+            "hub_profiles": {
+                "edge-full": {
+                    "local_profile_id": "cuda-local",
+                    "trainer_versions": ["ida-native-v3"],
+                    "execution": {
+                        "backend": "cuda",
+                        "artifact_id": "ida-native-cuda-v3",
+                        "binary_names": ["ida_native_train"],
+                        "binary_sha256": binary_sha256,
+                    },
+                    "native_execution": {
+                        "schema_version": "ida-native-execution-request.v1",
+                        "profile_id": "edge-full",
+                        "backend": "cuda",
+                        "precision_profile": "legacy_bf16",
+                        "optimizer_type": "adamw",
+                        "attention_backend": "hopper_wgmma_packed_fp4",
+                    },
+                },
+            },
+            "resource_classes": {"gpu-standard": {"device": 0}},
+        }), encoding="utf-8")
+
+        job = self.manifest_job(profile_id="edge-full")
+        job["worker_manifest"]["execution"] = {
+            "backend": "cuda",
+            "artifact_id": "ida-native-cuda-v3",
+            "binary_name": "ida_native_train",
+            "binary_sha256": binary_sha256,
+        }
+        return job
+
+    def test_v3_native_contract_reaches_foundry_request_without_public_translation(self) -> None:
+        job = self.v3_native_job()
+        local_request, _, _, resolved = manifest_local_request(job, self.config)
+        self.assertEqual(resolved["native_execution"]["schema_version"], "ida-native-execution-request.v1")
+        self.assertEqual(resolved["native_execution"]["optimizer_type"], "adamw")
+        self.assertEqual(resolved["native_execution"]["attention_backend"], "hopper_wgmma_packed_fp4")
+        command, output_path = build_command(job, self.config)
+        self.assertTrue(command)
+        descriptor = json.loads((output_path / "native-execution-request.json").read_text(encoding="utf-8"))
+        self.assertEqual(descriptor["profile_id"], "edge-full")
+        self.assertEqual(descriptor["optimizer_type"], "adamw")
+        self.assertNotIn("authority", descriptor)
+        native_request = json.loads((output_path / "native-request.json").read_text(encoding="utf-8"))
+        self.assertEqual(native_request["optimizer_type"], "adamw")
+        self.assertEqual(native_request["attention_backend"], "hopper_wgmma_packed_fp4")
+
+    def test_v3_native_contract_rejects_lion_or_scalar_translation(self) -> None:
+        job = self.v3_native_job()
+        binding = json.loads(self.binding_path.read_text(encoding="utf-8"))
+        binding["profiles"]["cuda-local"]["optimizer"] = "lion"
+        self.binding_path.write_text(json.dumps(binding), encoding="utf-8")
+        with self.assertRaisesRegex(WorkerError, "V3 native contract"):
+            manifest_local_request(job, self.config)
+
     def tearDown(self) -> None:
         self.temp.cleanup()
 
@@ -399,6 +474,21 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
             job["worker_manifest"].pop(field)
             with self.subTest(field=field), self.assertRaises(WorkerError):
                 build_command(job, self.config)
+
+    def test_legacy_v3_same_name_manifest_is_rejected_explicitly(self) -> None:
+        legacy = {
+            "schema_version": MANIFEST_SCHEMA_VERSION,
+            "run_id": "nf-12345678",
+            "org": "org.example",
+            "role_tier": "operator",
+            "transition_id": "transition-01",
+            "request": {
+                "profile_id": "edge-full",
+                "dataset_id": "dataset-001",
+            },
+        }
+        with self.assertRaisesRegex(WorkerError, "canonical Hub/Foundry envelope"):
+            build_command({"run_id": legacy["run_id"], "worker_manifest": legacy}, self.config)
 
     def test_manifest_rejects_nested_private_fields_without_echoing_values(self) -> None:
         for field, value in (
