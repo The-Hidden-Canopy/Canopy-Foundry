@@ -14,11 +14,14 @@ import re
 from typing import Any
 
 try:
-    from scripts.compatibility import BACKEND_POLICIES
+    from scripts.compatibility import (
+        BACKEND_POLICIES,
+        validate_v3_profile_contract,
+    )
     from scripts.model_contracts import validate_model_contract_id
     from scripts.private_runtime import validate_optional_private_runtime
 except ModuleNotFoundError:
-    from compatibility import BACKEND_POLICIES
+    from compatibility import BACKEND_POLICIES, validate_v3_profile_contract
     from model_contracts import validate_model_contract_id
     from private_runtime import validate_optional_private_runtime
 
@@ -62,16 +65,23 @@ def _id_list(value: Any, label: str) -> list[str]:
 def _execution(value: Any, label: str) -> dict[str, Any]:
     entry = _record(value, label)
     required = {"backend", "artifact_id", "binary_names"}
-    if set(entry) != required:
+    allowed = required | {"binary_sha256"}
+    if not required.issubset(entry) or set(entry) - allowed:
         raise DeploymentMapError(f"{label} fields are invalid")
     backend = _id(entry["backend"], f"{label}.backend")
     if backend not in BACKEND_POLICIES:
         raise DeploymentMapError(f"{label}.backend is invalid")
-    return {
+    normalized = {
         "backend": backend,
         "artifact_id": _id(entry["artifact_id"], f"{label}.artifact_id"),
         "binary_names": _id_list(entry["binary_names"], f"{label}.binary_names"),
     }
+    if "binary_sha256" in entry:
+        digest = entry["binary_sha256"]
+        if not isinstance(digest, str) or not _SHA256_RE.fullmatch(digest):
+            raise DeploymentMapError(f"{label}.binary_sha256 is invalid")
+        normalized["binary_sha256"] = digest.lower()
+    return normalized
 
 
 def load_deployment_map(path: Path) -> dict[str, Any]:
@@ -95,7 +105,9 @@ def load_deployment_map(path: Path) -> dict[str, Any]:
         profile_id = _id(profile_id, "Hub profile id")
         entry = _record(raw, f"Hub profile {profile_id}")
         required_profile = {"local_profile_id", "trainer_versions", "execution"}
-        allowed_profile = required_profile | {"model_contract_ids", "private_runtime"}
+        allowed_profile = required_profile | {
+            "model_contract_ids", "private_runtime", "native_execution"
+        }
         if not required_profile.issubset(entry) or set(entry) - allowed_profile:
             raise DeploymentMapError(f"Hub profile {profile_id} fields are invalid")
         local_profile_id = _id(
@@ -113,6 +125,23 @@ def load_deployment_map(path: Path) -> dict[str, Any]:
             ),
             "execution": _execution(entry["execution"], f"Hub profile {profile_id}.execution"),
         }
+        if "native_execution" in entry:
+            try:
+                normalized["native_execution"] = validate_v3_profile_contract(
+                    entry["native_execution"],
+                    profile_id,
+                    f"Hub profile {profile_id}.native_execution",
+                )
+            except ValueError as exc:
+                raise DeploymentMapError(str(exc)) from exc
+            if "binary_sha256" not in normalized["execution"]:
+                raise DeploymentMapError(
+                    f"Hub profile {profile_id}.execution.binary_sha256 is required for V3 native execution"
+                )
+            if normalized["native_execution"]["backend"] != normalized["execution"]["backend"]:
+                raise DeploymentMapError(
+                    f"Hub profile {profile_id}.native_execution backend does not match execution"
+                )
         if "model_contract_ids" in entry:
             try:
                 contracts = [
@@ -210,6 +239,10 @@ def validate_execution_attestation(
         backend != expected["backend"]
         or artifact_id != expected["artifact_id"]
         or binary_name not in expected["binary_names"]
+        or (
+            "binary_sha256" in expected
+            and digest.lower() != expected["binary_sha256"]
+        )
     ):
         raise DeploymentMapError(f"worker manifest execution does not match profile {profile_id}")
     return {

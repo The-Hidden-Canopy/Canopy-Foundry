@@ -127,6 +127,60 @@ class DeploymentMapTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(DeploymentMapError):
                 validate_execution_attestation(candidate, "edge-full", profile)
 
+    def test_v3_native_contract_is_explicit_and_binary_digest_is_pinned(self) -> None:
+        payload = self.valid_payload()
+        payload["hub_profiles"]["edge-full"]["native_execution"] = {
+            "schema_version": "ida-native-execution-request.v1",
+            "profile_id": "edge-full",
+            "backend": "cuda",
+            "precision_profile": "legacy_bf16",
+            "optimizer_type": "adamw",
+            "attention_backend": "hopper_wgmma_packed_fp4",
+        }
+        with self.assertRaisesRegex(DeploymentMapError, "binary_sha256 is required"):
+            load_deployment_map(self.write(payload))
+        payload["hub_profiles"]["edge-full"]["execution"]["binary_sha256"] = "a" * 64
+        deployment = load_deployment_map(self.write(payload))
+        profile = deployment["hub_profiles"]["edge-full"]
+        self.assertEqual(profile["native_execution"]["profile_id"], "edge-full")
+        valid = {
+            "backend": "cuda",
+            "artifact_id": "ida-native-cuda-v3",
+            "binary_name": "ida_native_train",
+            "binary_sha256": "a" * 64,
+        }
+        self.assertEqual(validate_execution_attestation(valid, "edge-full", profile), valid)
+        candidate = dict(valid)
+        candidate["binary_sha256"] = "b" * 64
+        with self.assertRaises(DeploymentMapError):
+            validate_execution_attestation(candidate, "edge-full", profile)
+
+    def test_v3_native_contract_rejects_silent_profile_translation_or_local_fields(self) -> None:
+        payload = self.valid_payload()
+        payload["hub_profiles"]["edge-full"]["native_execution"] = {
+            "schema_version": "ida-native-execution-request.v1",
+            "profile_id": "edge-full",
+            "backend": "cuda",
+            "precision_profile": "legacy_bf16",
+            "optimizer_type": "lion",
+            "attention_backend": "scalar_flash",
+        }
+        with self.assertRaises(DeploymentMapError):
+            load_deployment_map(self.write(payload))
+
+        payload = self.valid_payload()
+        payload["hub_profiles"]["edge-full"]["native_execution"] = {
+            "schema_version": "ida-native-execution-request.v1",
+            "profile_id": "edge-full",
+            "backend": "cuda",
+            "precision_profile": "legacy_bf16",
+            "optimizer_type": "adamw",
+            "attention_backend": "hopper_wgmma_packed_fp4",
+            "output_dir": "private",
+        }
+        with self.assertRaises(DeploymentMapError):
+            load_deployment_map(self.write(payload))
+
     def test_model_contract_and_private_runtime_bindings_are_opaque_and_exact(self) -> None:
         payload = self.valid_payload()
         payload["hub_profiles"]["edge-full"]["model_contract_ids"] = [
