@@ -494,8 +494,16 @@ placeholder is intentionally not executable):
 
 The worker records the validated native descriptor in the private run
 directory and separately writes the low-level request consumed by the native
-binary. Neither file is returned to the Hub; worker updates contain only the
-bounded public progress envelope.
+binary. The low-level V3 request intentionally omits Foundry supervisor paths
+such as `repo_root`, `status_file`, `job_id`, and
+`expected_terminal_phase`; the V3 parser rejects or does not consume those
+fields.
+V3 emits its completion receipt as `metrics.json`. For CUDA, Foundry accepts
+that receipt only when it names the worker-owned output directory and a
+present `model.safetensors`; CPU and OpenCL smoke receipts retain their
+explicit no-checkpoint result. Neither the descriptor nor the low-level
+request is returned to the Hub; worker updates contain only the bounded
+public progress envelope.
 
 ### Use your own config, dataset, model, or checkpoint
 
