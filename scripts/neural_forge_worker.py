@@ -1384,13 +1384,26 @@ def publish_terminal_update(
 ) -> None:
     """Make Hub authoritative before making the local receipt terminal."""
 
-    client.update(
-        run_id,
-        status=status,
-        metrics_available=metrics_available,
-        leaderboard_attestation=leaderboard_attestation,
-        event=event,
-    )
+    try:
+        client.update(
+            run_id,
+            status=status,
+            metrics_available=metrics_available,
+            leaderboard_attestation=leaderboard_attestation,
+            event=event,
+        )
+    except WorkerError as update_error:
+        # The request may have reached Hub even when the response was lost.
+        # Reconcile only an exact terminal state; never treat a still-running
+        # or cancel-requested run as an accepted terminal update.
+        try:
+            state = client.get_worker_run(run_id)
+        except WorkerError:
+            raise update_error
+        if state["run"]["status"] != status or (
+            status == "succeeded" and not state["run"]["evaluation"]["complete"]
+        ):
+            raise update_error
     complete_local_receipt(
         receipt_store,
         run_id,
@@ -1934,7 +1947,21 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
         except json.JSONDecodeError:
             continue
         if isinstance(event, dict):
-            client.update(run_id, status="running", event=event)
+            try:
+                client.update(run_id, status="running", event=event)
+            except WorkerError:
+                try:
+                    hub_state = client.get_worker_run(run_id)
+                except WorkerError:
+                    raise
+                hub_status = hub_state["run"]["status"]
+                if hub_state["cancel_requested"] or hub_status == "cancel_requested":
+                    cancel_requested = True
+                    break
+                if hub_status in {"failed", "cancelled"}:
+                    hub_terminal_status = hub_status
+                    break
+                raise
             event_count += 1
     metrics_available = completed_metrics(
         output_path,
