@@ -16,7 +16,8 @@ class LocalReceiptError(RuntimeError):
     """A local run receipt is invalid or conflicts with the requested run."""
 
 
-RECEIPT_SCHEMA_VERSION = "neural-foundry-run-receipt.v1"
+RECEIPT_SCHEMA_VERSION = "neural-foundry-run-receipt.v2"
+LEGACY_RECEIPT_SCHEMA_VERSION = "neural-foundry-run-receipt.v1"
 RUN_ID_RE = re.compile(r"^nf-[a-z0-9-]{8,80}$", re.IGNORECASE)
 
 
@@ -64,9 +65,15 @@ class LocalRunReceiptStore:
             return None
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise LocalReceiptError("local receipt is invalid") from exc
-        if not isinstance(payload, dict) or payload.get("schema_version") != RECEIPT_SCHEMA_VERSION:
+        if not isinstance(payload, dict) or payload.get("schema_version") not in {
+            LEGACY_RECEIPT_SCHEMA_VERSION,
+            RECEIPT_SCHEMA_VERSION,
+        }:
             raise LocalReceiptError("local receipt is invalid")
-        if payload.get("status") not in {"in_progress", "succeeded", "failed", "cancelled"}:
+        allowed_statuses = {"in_progress", "succeeded", "failed"}
+        if payload.get("schema_version") == RECEIPT_SCHEMA_VERSION:
+            allowed_statuses.add("cancelled")
+        if payload.get("status") not in allowed_statuses:
             raise LocalReceiptError("local receipt status is invalid")
         if not isinstance(payload.get("manifest_sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", payload["manifest_sha256"]):
             raise LocalReceiptError("local receipt fingerprint is invalid")
@@ -123,6 +130,7 @@ class LocalRunReceiptStore:
             raise LocalReceiptError("local receipt is already terminal")
         updated = {
             **existing,
+            "schema_version": RECEIPT_SCHEMA_VERSION,
             "status": status,
             "metrics_available": bool(metrics_available),
         }

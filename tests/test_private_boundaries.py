@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from scripts.local_receipt import LocalReceiptError, LocalRunReceiptStore
+from scripts.local_receipt import RECEIPT_SCHEMA_VERSION, LocalReceiptError, LocalRunReceiptStore
 from scripts.model_contracts import ModelContractError, validate_model_shape
 from scripts.private_runtime import PrivateRuntimeError, validate_private_runtime
 
@@ -67,6 +67,15 @@ class PrivateBoundaryTests(unittest.TestCase):
                 store.claim(manifest["run_id"], changed)
             with self.assertRaisesRegex(LocalReceiptError, "already terminal"):
                 store.complete(manifest["run_id"], manifest, status="failed", metrics_available=False)
+            legacy_manifest = {"run_id": "nf-legacy123456", "request": {"profile": "cuda-local"}}
+            store.claim(legacy_manifest["run_id"], legacy_manifest)
+            legacy_path = Path(temporary) / "runs" / ".receipts" / f"{legacy_manifest['run_id']}.json"
+            legacy_receipt = json.loads(legacy_path.read_text())
+            legacy_receipt["schema_version"] = "neural-foundry-run-receipt.v1"
+            legacy_path.write_text(json.dumps(legacy_receipt), encoding="utf-8")
+            store.complete(legacy_manifest["run_id"], legacy_manifest, status="cancelled", metrics_available=False)
+            upgraded = json.loads(legacy_path.read_text())
+            self.assertEqual(upgraded["schema_version"], RECEIPT_SCHEMA_VERSION)
             receipt = json.loads((Path(temporary) / "runs" / ".receipts" / "nf-receipt12345678.json").read_text())
             self.assertNotIn("command", receipt)
             self.assertNotIn("path", receipt)
