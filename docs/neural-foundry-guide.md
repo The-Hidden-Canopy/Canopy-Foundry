@@ -243,6 +243,14 @@ The wrapper should only publish metrics after all of the following are true:
 - the checkpoint files satisfy the expected contract;
 - the governed state transition and audit/domain event succeed.
 
+Native completion does not itself authorize a successful Hub run. The worker
+publishes the observed process exit as a non-terminal `running` update, polls
+the worker status route for evaluation-gate completion and controller
+cancellation, and only then submits `succeeded` or `cancelled`. If required
+evaluation gates do not complete before the manifest deadline, the worker
+submits `failed`. The local receipt is marked terminal only after the Hub
+accepts the corresponding governed update.
+
 ## 7. Expected failures
 
 | Symptom | Meaning | Correct response |

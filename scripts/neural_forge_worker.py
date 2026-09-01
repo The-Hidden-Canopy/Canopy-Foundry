@@ -128,6 +128,9 @@ TRAINING_MODES = {"from_scratch", "fine_tune", "resume"}
 DISABLED_OPTIMIZERS = {"adam", "adamw"}
 V3_METRIC_BACKENDS = {"cuda": "native", "cpu": "native_cpu", "opencl": "native_opencl"}
 V3_NATIVE_EXPECTED_PHASE = "native_smoke_complete"
+TERMINAL_RUN_STATUSES = {"succeeded", "failed", "cancelled"}
+HUB_STATE_POLL_MAX_SECONDS = 5.0
+HUB_FINALIZATION_MARGIN_SECONDS = 1.0
 OPAQUE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 RESERVED_IDS = {"__proto__", "prototype", "constructor"}
@@ -1238,6 +1241,27 @@ class HubClient:
         claimed["worker_manifest"] = payload["worker_manifest"]
         return claimed
 
+    def get_worker_run(self, run_id: str) -> dict[str, Any]:
+        if not RUN_ID_RE.fullmatch(str(run_id)):
+            raise WorkerError("run_id is invalid")
+        payload = self._request("GET", f"/api/neural-forge/worker/runs/{run_id}")
+        run = payload.get("run")
+        if not isinstance(run, dict) or run.get("run_id") != run_id:
+            raise WorkerError("Hub worker status is incomplete")
+        status = run.get("status")
+        if status not in {"queued", "running", "cancel_requested", *TERMINAL_RUN_STATUSES}:
+            raise WorkerError("Hub worker status is invalid")
+        evaluation = run.get("evaluation")
+        if not isinstance(evaluation, dict) or not isinstance(evaluation.get("complete"), bool):
+            raise WorkerError("Hub worker evaluation status is incomplete")
+        cancel_requested = payload.get("cancel_requested")
+        if not isinstance(cancel_requested, bool):
+            raise WorkerError("Hub worker cancellation status is incomplete")
+        return {
+            "run": run,
+            "cancel_requested": cancel_requested,
+        }
+
     def update(
         self,
         run_id: str,
@@ -1279,6 +1303,101 @@ def stable_operation_id(
         "leaderboard_attestation": leaderboard_attestation,
     }
     return f"nfu-{canonical_fingerprint(payload)}"
+
+
+def _hub_poll_interval(config: "WorkerConfig") -> float:
+    return min(max(config.poll_seconds, 0.05), HUB_STATE_POLL_MAX_SECONDS)
+
+
+def wait_for_hub_evaluation(
+    job: dict[str, Any], config: "WorkerConfig", client: HubClient
+) -> tuple[str, bool]:
+    """Wait for Hub-owned evaluation before attempting a terminal success.
+
+    The boolean in the result is true when Hub has already made the run
+    terminal (for example, deadline recovery).  In that case the worker must
+    not issue another state mutation.
+    """
+
+    run_id = job.get("run_id")
+    manifest = job.get("worker_manifest") or job.get("manifest")
+    if not isinstance(manifest, dict):
+        raise WorkerError("worker manifest is required")
+    deadline = utc_expiry(manifest.get("deadline_at"), "worker manifest deadline")
+    interval = _hub_poll_interval(config)
+    while True:
+        try:
+            state = client.get_worker_run(run_id)
+        except WorkerError:
+            remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
+            if remaining <= HUB_FINALIZATION_MARGIN_SECONDS:
+                return "failed", False
+            time.sleep(min(interval, max(0.05, remaining - HUB_FINALIZATION_MARGIN_SECONDS)))
+            continue
+
+        run = state["run"]
+        status = run["status"]
+        if state["cancel_requested"] or status == "cancel_requested":
+            return "cancelled", False
+        if status in TERMINAL_RUN_STATUSES:
+            return status, True
+        if status != "running":
+            raise WorkerError(f"Hub worker run is not executable: {status}")
+        if run["evaluation"]["complete"]:
+            return "succeeded", False
+
+        remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
+        if remaining <= HUB_FINALIZATION_MARGIN_SECONDS:
+            return "failed", False
+        time.sleep(min(interval, max(0.05, remaining - HUB_FINALIZATION_MARGIN_SECONDS)))
+
+
+def complete_local_receipt(
+    receipt_store: LocalRunReceiptStore,
+    run_id: str,
+    receipt_identity: dict[str, Any],
+    *,
+    status: str,
+    metrics_available: bool,
+) -> None:
+    try:
+        receipt_store.complete(
+            run_id,
+            receipt_identity,
+            status=status,
+            metrics_available=metrics_available,
+        )
+    except LocalReceiptError as exc:
+        raise WorkerError("local run receipt could not be finalized") from exc
+
+
+def publish_terminal_update(
+    client: HubClient,
+    receipt_store: LocalRunReceiptStore,
+    run_id: str,
+    receipt_identity: dict[str, Any],
+    *,
+    status: str,
+    event: dict[str, Any],
+    metrics_available: bool,
+    leaderboard_attestation: dict[str, str] | None = None,
+) -> None:
+    """Make Hub authoritative before making the local receipt terminal."""
+
+    client.update(
+        run_id,
+        status=status,
+        metrics_available=metrics_available,
+        leaderboard_attestation=leaderboard_attestation,
+        event=event,
+    )
+    complete_local_receipt(
+        receipt_store,
+        run_id,
+        receipt_identity,
+        status=status,
+        metrics_available=metrics_available,
+    )
 
 
 def receipt_manifest(job: dict[str, Any]) -> dict[str, Any]:
@@ -1573,6 +1692,12 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
         client.update(run_id, status="failed", event={"type": "worker_error", "message": str(exc)})
         return
     if receipt["decision"] == "terminal":
+        state = client.get_worker_run(run_id)
+        hub_status = state["run"]["status"]
+        if hub_status == receipt["status"]:
+            return
+        if state["cancel_requested"] or hub_status in {"cancel_requested", *TERMINAL_RUN_STATUSES}:
+            raise WorkerError("local terminal receipt conflicts with Hub run state")
         client.update(
             run_id,
             status=receipt["status"],
@@ -1590,29 +1715,29 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
     try:
         command, output_path = build_command(job, config)
     except WorkerError as exc:
-        try:
-            receipt_store.complete(run_id, receipt_identity, status="failed", metrics_available=False)
-        except LocalReceiptError:
-            pass
-        client.update(run_id, status="failed", event={"type": "worker_error", "message": str(exc)})
+        publish_terminal_update(
+            client, receipt_store, run_id, receipt_identity,
+            status="failed", metrics_available=False,
+            event={"type": "worker_error", "message": str(exc)},
+        )
         return
 
     manifest = job.get("worker_manifest") or job.get("manifest")
     policy = manifest.get("policy") if isinstance(manifest, dict) else job.get("policy")
     if not isinstance(policy, dict):
-        try:
-            receipt_store.complete(run_id, receipt_identity, status="failed", metrics_available=False)
-        except LocalReceiptError:
-            pass
-        client.update(run_id, status="failed", event={"type": "worker_error", "message": "execution policy is missing"})
+        publish_terminal_update(
+            client, receipt_store, run_id, receipt_identity,
+            status="failed", metrics_available=False,
+            event={"type": "worker_error", "message": "execution policy is missing"},
+        )
         return
     timeout_seconds = policy.get("timeout_seconds")
     if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int) or not 1 <= timeout_seconds <= 7 * 24 * 60 * 60:
-        try:
-            receipt_store.complete(run_id, receipt_identity, status="failed", metrics_available=False)
-        except LocalReceiptError:
-            pass
-        client.update(run_id, status="failed", event={"type": "worker_error", "message": "timeout policy is invalid"})
+        publish_terminal_update(
+            client, receipt_store, run_id, receipt_identity,
+            status="failed", metrics_available=False,
+            event={"type": "worker_error", "message": "timeout policy is invalid"},
+        )
         return
     try:
         native_request = json.loads(
@@ -1628,11 +1753,11 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
         if not isinstance(expected_phase, str) or not isinstance(backend, str):
             raise ValueError
     except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
-        try:
-            receipt_store.complete(run_id, receipt_identity, status="failed", metrics_available=False)
-        except LocalReceiptError:
-            pass
-        client.update(run_id, status="failed", event={"type": "worker_error", "message": "native execution contract is invalid"})
+        publish_terminal_update(
+            client, receipt_store, run_id, receipt_identity,
+            status="failed", metrics_available=False,
+            event={"type": "worker_error", "message": "native execution contract is invalid"},
+        )
         return
     client.update(run_id, status="running", event={"type": "worker_started", "status": "running"})
     process: subprocess.Popen[bytes] | None = None
@@ -1641,6 +1766,8 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
     output_overflow = threading.Event()
     output_limit = threading.Event()
     timed_out = False
+    cancel_requested = False
+    hub_terminal_status: str | None = None
     try:
         creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
         process = subprocess.Popen(
@@ -1670,11 +1797,31 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
             reader.start()
         deadline = time.monotonic() + timeout_seconds
         next_output_check = 0.0
+        next_hub_check = 0.0
         while process.poll() is None:
             if output_overflow.is_set():
                 terminate_process_tree(process)
                 break
             now_monotonic = time.monotonic()
+            if now_monotonic >= next_hub_check:
+                try:
+                    hub_state = client.get_worker_run(run_id)
+                except WorkerError:
+                    # A transient status-read failure must not turn a live
+                    # native process into a fabricated terminal result.  The
+                    # Hub deadline and final update remain authoritative.
+                    pass
+                else:
+                    hub_status = hub_state["run"]["status"]
+                    if hub_state["cancel_requested"] or hub_status == "cancel_requested":
+                        cancel_requested = True
+                        terminate_process_tree(process)
+                        break
+                    if hub_status in {"failed", "cancelled"}:
+                        hub_terminal_status = hub_status
+                        terminate_process_tree(process)
+                        break
+                next_hub_check = now_monotonic + _hub_poll_interval(config)
             if now_monotonic >= next_output_check:
                 try:
                     used_bytes, used_files = output_usage(output_path)
@@ -1700,11 +1847,11 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
         for reader in readers:
             reader.join(timeout=10)
     except OSError:
-        try:
-            receipt_store.complete(run_id, receipt_identity, status="failed", metrics_available=False)
-        except LocalReceiptError:
-            pass
-        client.update(run_id, status="failed", event={"type": "worker_error", "message": "native process could not start"})
+        publish_terminal_update(
+            client, receipt_store, run_id, receipt_identity,
+            status="failed", metrics_available=False,
+            event={"type": "worker_error", "message": "native process could not start"},
+        )
         return
 
     stdout = b"".join(stdout_chunks).decode("utf-8", errors="replace")
@@ -1713,43 +1860,69 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
         (output_path / "stderr.log").write_text(stderr, encoding="utf-8")
     except OSError:
         pass
+    checkpoint_written = (output_path / "model.safetensors").is_file()
+    if cancel_requested:
+        publish_terminal_update(
+            client,
+            receipt_store,
+            run_id,
+            receipt_identity,
+            status="cancelled",
+            metrics_available=False,
+            event={
+                "type": "process_exit",
+                "status": "cancelled",
+                "exit_code": process.returncode,
+                "checkpoint_written": checkpoint_written,
+            },
+        )
+        return
+    if hub_terminal_status is not None:
+        complete_local_receipt(
+            receipt_store,
+            run_id,
+            receipt_identity,
+            status="cancelled" if hub_terminal_status == "cancelled" else "failed",
+            metrics_available=False,
+        )
+        return
     if timed_out:
-        try:
-            receipt_store.complete(run_id, receipt_identity, status="failed", metrics_available=False)
-        except LocalReceiptError:
-            pass
-        client.update(run_id, status="failed", event={"type": "worker_error", "message": "native process timed out"})
+        publish_terminal_update(
+            client, receipt_store, run_id, receipt_identity,
+            status="failed", metrics_available=False,
+            event={"type": "worker_error", "message": "native process timed out"},
+        )
         return
     if output_overflow.is_set():
-        try:
-            receipt_store.complete(run_id, receipt_identity, status="failed", metrics_available=False)
-        except LocalReceiptError:
-            pass
-        client.update(run_id, status="failed", event={"type": "worker_error", "message": "native process output exceeded the safety limit"})
+        publish_terminal_update(
+            client, receipt_store, run_id, receipt_identity,
+            status="failed", metrics_available=False,
+            event={"type": "worker_error", "message": "native process output exceeded the safety limit"},
+        )
         return
     if output_limit.is_set():
-        try:
-            receipt_store.complete(run_id, receipt_identity, status="failed", metrics_available=False)
-        except LocalReceiptError:
-            pass
-        client.update(run_id, status="failed", event={"type": "worker_error", "message": "native process output exceeded the local quota"})
+        publish_terminal_update(
+            client, receipt_store, run_id, receipt_identity,
+            status="failed", metrics_available=False,
+            event={"type": "worker_error", "message": "native process output exceeded the local quota"},
+        )
         return
 
     try:
         used_bytes, used_files = output_usage(output_path)
     except WorkerError:
-        try:
-            receipt_store.complete(run_id, receipt_identity, status="failed", metrics_available=False)
-        except LocalReceiptError:
-            pass
-        client.update(run_id, status="failed", event={"type": "worker_error", "message": "native output failed the local boundary check"})
+        publish_terminal_update(
+            client, receipt_store, run_id, receipt_identity,
+            status="failed", metrics_available=False,
+            event={"type": "worker_error", "message": "native output failed the local boundary check"},
+        )
         return
     if used_bytes > config.max_output_bytes or used_files > config.max_output_files:
-        try:
-            receipt_store.complete(run_id, receipt_identity, status="failed", metrics_available=False)
-        except LocalReceiptError:
-            pass
-        client.update(run_id, status="failed", event={"type": "worker_error", "message": "native process output exceeded the local quota"})
+        publish_terminal_update(
+            client, receipt_store, run_id, receipt_identity,
+            status="failed", metrics_available=False,
+            event={"type": "worker_error", "message": "native process output exceeded the local quota"},
+        )
         return
 
     event_count = 0
@@ -1770,18 +1943,57 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
         backend=backend,
         v3_native=v3_native,
     )
-    checkpoint_written = (output_path / "model.safetensors").is_file()
     final_status = "succeeded" if process.returncode == 0 and metrics_available else "failed"
-    leaderboard_attestation = optional_leaderboard_attestation(job, config) if final_status == "succeeded" else None
     try:
-        receipt_store.complete(
-            run_id, receipt_identity, status=final_status, metrics_available=metrics_available
+        hub_state = client.get_worker_run(run_id)
+    except WorkerError:
+        hub_state = None
+    if hub_state is not None:
+        hub_status = hub_state["run"]["status"]
+        if hub_state["cancel_requested"] or hub_status == "cancel_requested":
+            final_status = "cancelled"
+            metrics_available = False
+        elif hub_status in TERMINAL_RUN_STATUSES:
+            complete_local_receipt(
+                receipt_store,
+                run_id,
+                receipt_identity,
+                status="cancelled" if hub_status == "cancelled" else "failed" if hub_status == "failed" else final_status,
+                metrics_available=metrics_available,
+            )
+            return
+        elif hub_status != "running":
+            raise WorkerError(f"Hub worker run is not executable: {hub_status}")
+    if final_status == "succeeded":
+        # A successful native process is still only an observed execution
+        # result.  Hub evaluation remains a separate, governed step.
+        client.update(
+            run_id,
+            status="running",
+            metrics_available=True,
+            event={
+                "type": "process_exit",
+                "status": "running",
+                "exit_code": process.returncode,
+                "checkpoint_written": checkpoint_written,
+            },
         )
-    except LocalReceiptError:
-        final_status = "failed"
-        metrics_available = False
-    client.update(
+        final_status, hub_terminal = wait_for_hub_evaluation(job, config, client)
+        if hub_terminal:
+            complete_local_receipt(
+                receipt_store,
+                run_id,
+                receipt_identity,
+                status="cancelled" if final_status == "cancelled" else "failed" if final_status == "failed" else "succeeded",
+                metrics_available=metrics_available,
+            )
+            return
+    leaderboard_attestation = optional_leaderboard_attestation(job, config) if final_status == "succeeded" else None
+    publish_terminal_update(
+        client,
+        receipt_store,
         run_id,
+        receipt_identity,
         status=final_status,
         metrics_available=metrics_available,
         leaderboard_attestation=leaderboard_attestation,

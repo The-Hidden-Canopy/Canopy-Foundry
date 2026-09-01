@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 from dataclasses import replace
 from pathlib import Path
@@ -16,6 +17,7 @@ from scripts.neural_forge_worker import (
     bounded_event,
     build_command,
     completed_metrics,
+    execute_job,
     local_config,
     manifest_local_request,
     public_event,
@@ -24,6 +26,8 @@ from scripts.neural_forge_worker import (
     sanitized_environment,
     output_usage,
     optional_leaderboard_attestation,
+    publish_terminal_update,
+    wait_for_hub_evaluation,
 )
 from scripts.compatibility import (
     BACKEND_POLICIES,
@@ -922,6 +926,237 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
         }
         claimed = client.claim()
         self.assertEqual(claimed["worker_manifest"]["schema_version"], "neural-forge-worker-manifest.v2")
+
+    def test_hub_status_preserves_evaluation_and_cancellation_state(self) -> None:
+        client = object.__new__(HubClient)
+        client._request = lambda *_args, **_kwargs: {
+            "ok": True,
+            "run": {
+                "run_id": "nf-12345678",
+                "status": "running",
+                "evaluation": {"complete": False},
+            },
+            "cancel_requested": False,
+        }
+        state = client.get_worker_run("nf-12345678")
+        self.assertEqual(state["run"]["status"], "running")
+        self.assertFalse(state["run"]["evaluation"]["complete"])
+        self.assertFalse(state["cancel_requested"])
+
+        client._request = lambda *_args, **_kwargs: {
+            "ok": True,
+            "run": {
+                "run_id": "nf-12345678",
+                "status": "cancel_requested",
+                "evaluation": {"complete": False},
+            },
+            "cancel_requested": True,
+        }
+        state = client.get_worker_run("nf-12345678")
+        self.assertTrue(state["cancel_requested"])
+
+    def test_worker_waits_for_hub_evaluation_before_terminal_success(self) -> None:
+        from unittest.mock import patch
+
+        job = self.manifest_job()
+
+        class FakeClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def get_worker_run(self, _run_id: str) -> dict[str, object]:
+                self.calls += 1
+                return {
+                    "run": {
+                        "run_id": "nf-12345678",
+                        "status": "running",
+                        "evaluation": {"complete": self.calls > 1},
+                    },
+                    "cancel_requested": False,
+                }
+
+        client = FakeClient()
+        with patch("scripts.neural_forge_worker.time.sleep") as sleep:
+            result = wait_for_hub_evaluation(job, replace(self.config, poll_seconds=0.05), client)
+        self.assertEqual(result, ("succeeded", False))
+        self.assertEqual(client.calls, 2)
+        sleep.assert_called_once()
+
+    def test_worker_wait_for_evaluation_honors_controller_cancellation(self) -> None:
+        job = self.manifest_job()
+
+        class FakeClient:
+            def get_worker_run(self, _run_id: str) -> dict[str, object]:
+                return {
+                    "run": {
+                        "run_id": "nf-12345678",
+                        "status": "cancel_requested",
+                        "evaluation": {"complete": False},
+                    },
+                    "cancel_requested": True,
+                }
+
+        self.assertEqual(
+            wait_for_hub_evaluation(job, self.config, FakeClient()),
+            ("cancelled", False),
+        )
+
+    def test_worker_wait_for_evaluation_fails_closed_at_deadline(self) -> None:
+        job = self.manifest_job()
+        job["worker_manifest"]["deadline_at"] = (
+            datetime.now(timezone.utc) - timedelta(seconds=2)
+        ).isoformat().replace("+00:00", "Z")
+
+        class UnavailableClient:
+            def get_worker_run(self, _run_id: str) -> dict[str, object]:
+                raise WorkerError("Hub unavailable")
+
+        self.assertEqual(
+            wait_for_hub_evaluation(job, self.config, UnavailableClient()),
+            ("failed", False),
+        )
+
+    def test_terminal_update_commits_hub_before_local_receipt(self) -> None:
+        calls: list[str] = []
+
+        class FakeClient:
+            def update(self, *_args: object, **_kwargs: object) -> None:
+                calls.append("hub")
+
+        class FakeReceiptStore:
+            def complete(self, *_args: object, **_kwargs: object) -> None:
+                calls.append("local")
+
+        publish_terminal_update(
+            FakeClient(),  # type: ignore[arg-type]
+            FakeReceiptStore(),  # type: ignore[arg-type]
+            "nf-12345678",
+            {"run_id": "nf-12345678"},
+            status="succeeded",
+            metrics_available=True,
+            event={"type": "process_exit", "status": "succeeded"},
+        )
+        self.assertEqual(calls, ["hub", "local"])
+
+    def test_execute_job_waits_for_evaluation_before_local_success_receipt(self) -> None:
+        from unittest.mock import patch
+
+        run_id = "nf-execute123456"
+        output = self.config.run_root / run_id
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "native-request.json").write_text(
+            json.dumps({
+                "device": {"runtime": "cuda"},
+                "expected_terminal_phase": "native_smoke_complete",
+            }), encoding="utf-8"
+        )
+        (output / "native-execution-request.json").write_text("{}", encoding="utf-8")
+        job = {
+            "run_id": run_id,
+            "worker_manifest": {
+                "schema_version": MANIFEST_SCHEMA_VERSION,
+                "run_id": run_id,
+                "deadline_at": self.manifest_window()["deadline_at"],
+                "policy": {"timeout_seconds": 60},
+            },
+        }
+        child_code = (
+            "import json,pathlib,sys; "
+            "p=pathlib.Path(sys.argv[1]); "
+            "(p/'model.safetensors').write_bytes(b'checkpoint'); "
+            "(p/'metrics.json').write_text(json.dumps({"
+            "'type':'complete','status':'complete','backend':'native',"
+            "'step':1,'optimizer_steps':1,'loss':0.5,'learning_rate':0.0003,"
+            "'tokens':2048,'tokens_per_second':100.0,'grad_norm':1.0,"
+            "'checkpoint_written':True,'output':str(p.resolve())}))"
+        )
+
+        class FakeClient:
+            def __init__(self) -> None:
+                self.status_calls = 0
+                self.updates: list[tuple[str, dict[str, object] | None]] = []
+
+            def get_worker_run(self, _run_id: str) -> dict[str, object]:
+                self.status_calls += 1
+                return {
+                    "run": {
+                        "run_id": run_id,
+                        "status": "running",
+                        "evaluation": {"complete": self.status_calls > 1},
+                    },
+                    "cancel_requested": False,
+                }
+
+            def update(self, _run_id: str, *, status: str, event: dict[str, object] | None = None,
+                       **_kwargs: object) -> None:
+                self.updates.append((status, event))
+
+        client = FakeClient()
+        with patch(
+            "scripts.neural_forge_worker.build_command",
+            return_value=([sys.executable, "-c", child_code, str(output)], output),
+        ), patch("scripts.neural_forge_worker.time.sleep"):
+            execute_job(job, replace(self.config, poll_seconds=0.05), client)  # type: ignore[arg-type]
+
+        self.assertEqual(client.updates[0][0], "running")
+        self.assertEqual(client.updates[-1][0], "succeeded")
+        self.assertEqual([status for status, _ in client.updates].count("succeeded"), 1)
+        receipt = json.loads((self.config.run_root / ".receipts" / f"{run_id}.json").read_text())
+        self.assertEqual(receipt["status"], "succeeded")
+        self.assertGreaterEqual(client.status_calls, 2)
+
+    def test_execute_job_honors_controller_cancellation(self) -> None:
+        from unittest.mock import patch
+
+        run_id = "nf-cancel123456"
+        output = self.config.run_root / run_id
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "native-request.json").write_text(
+            json.dumps({
+                "device": {"runtime": "cuda"},
+                "expected_terminal_phase": "native_smoke_complete",
+            }), encoding="utf-8"
+        )
+        job = {
+            "run_id": run_id,
+            "worker_manifest": {
+                "schema_version": MANIFEST_SCHEMA_VERSION,
+                "run_id": run_id,
+                "deadline_at": self.manifest_window()["deadline_at"],
+                "policy": {"timeout_seconds": 60},
+            },
+        }
+
+        class FakeClient:
+            def __init__(self) -> None:
+                self.updates: list[str] = []
+
+            def get_worker_run(self, _run_id: str) -> dict[str, object]:
+                return {
+                    "run": {
+                        "run_id": run_id,
+                        "status": "cancel_requested",
+                        "evaluation": {"complete": False},
+                    },
+                    "cancel_requested": True,
+                }
+
+            def update(self, _run_id: str, *, status: str, **_kwargs: object) -> None:
+                self.updates.append(status)
+
+        client = FakeClient()
+        with patch(
+            "scripts.neural_forge_worker.build_command",
+            return_value=([sys.executable, "-c", "import time; time.sleep(60)"], output),
+        ), patch(
+            "scripts.neural_forge_worker.terminate_process_tree",
+            side_effect=lambda process: process.kill(),
+        ), patch("scripts.neural_forge_worker.time.sleep"):
+            execute_job(job, replace(self.config, poll_seconds=0.05), client)  # type: ignore[arg-type]
+
+        self.assertEqual(client.updates[-1], "cancelled")
+        receipt = json.loads((self.config.run_root / ".receipts" / f"{run_id}.json").read_text())
+        self.assertEqual(receipt["status"], "cancelled")
 
     def test_hub_update_carries_only_sanitized_leaderboard_attestation(self) -> None:
         client = object.__new__(HubClient)

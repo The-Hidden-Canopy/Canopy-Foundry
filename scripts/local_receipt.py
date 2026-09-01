@@ -66,7 +66,7 @@ class LocalRunReceiptStore:
             raise LocalReceiptError("local receipt is invalid") from exc
         if not isinstance(payload, dict) or payload.get("schema_version") != RECEIPT_SCHEMA_VERSION:
             raise LocalReceiptError("local receipt is invalid")
-        if payload.get("status") not in {"in_progress", "succeeded", "failed"}:
+        if payload.get("status") not in {"in_progress", "succeeded", "failed", "cancelled"}:
             raise LocalReceiptError("local receipt status is invalid")
         if not isinstance(payload.get("manifest_sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", payload["manifest_sha256"]):
             raise LocalReceiptError("local receipt fingerprint is invalid")
@@ -95,7 +95,7 @@ class LocalRunReceiptStore:
                 raise LocalReceiptError("local receipt could not be read")
             if existing["manifest_sha256"] != fingerprint:
                 raise LocalReceiptError("run identity was reused for a different manifest")
-            if existing["status"] == "succeeded":
+            if existing["status"] in {"succeeded", "cancelled"}:
                 return {"decision": "terminal", **existing}
             if existing["status"] == "in_progress":
                 return {"decision": "busy", **existing}
@@ -112,13 +112,15 @@ class LocalRunReceiptStore:
             return {"decision": "new", **record}
 
     def complete(self, run_id: str, manifest: dict[str, Any], *, status: str, metrics_available: bool) -> dict[str, Any]:
-        if status not in {"succeeded", "failed"}:
+        if status not in {"succeeded", "failed", "cancelled"}:
             raise LocalReceiptError("terminal receipt status is invalid")
         path = self._path(_safe_run_id(run_id))
         existing = self._read(path)
         fingerprint = canonical_fingerprint(manifest)
         if existing is None or existing["manifest_sha256"] != fingerprint:
             raise LocalReceiptError("local receipt does not match manifest")
+        if existing["status"] in {"succeeded", "cancelled"} and existing["status"] != status:
+            raise LocalReceiptError("local receipt is already terminal")
         updated = {
             **existing,
             "status": status,

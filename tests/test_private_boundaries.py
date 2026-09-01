@@ -57,9 +57,16 @@ class PrivateBoundaryTests(unittest.TestCase):
             store.complete(manifest["run_id"], manifest, status="succeeded", metrics_available=True)
             replay = store.claim(manifest["run_id"], manifest)
             self.assertEqual(replay["decision"], "terminal")
+            cancelled_manifest = {"run_id": "nf-cancelled123456", "request": {"profile": "cuda-local"}}
+            store.claim(cancelled_manifest["run_id"], cancelled_manifest)
+            store.complete(cancelled_manifest["run_id"], cancelled_manifest, status="cancelled", metrics_available=False)
+            cancelled_replay = store.claim(cancelled_manifest["run_id"], cancelled_manifest)
+            self.assertEqual(cancelled_replay["decision"], "terminal")
             changed = {**manifest, "request": {"profile": "different"}}
             with self.assertRaises(LocalReceiptError):
                 store.claim(manifest["run_id"], changed)
+            with self.assertRaisesRegex(LocalReceiptError, "already terminal"):
+                store.complete(manifest["run_id"], manifest, status="failed", metrics_available=False)
             receipt = json.loads((Path(temporary) / "runs" / ".receipts" / "nf-receipt12345678.json").read_text())
             self.assertNotIn("command", receipt)
             self.assertNotIn("path", receipt)
