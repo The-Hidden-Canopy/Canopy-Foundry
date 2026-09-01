@@ -25,7 +25,11 @@ from scripts.neural_forge_worker import (
     output_usage,
     optional_leaderboard_attestation,
 )
-from scripts.compatibility import BACKEND_POLICIES, MANIFEST_SCHEMA_VERSION
+from scripts.compatibility import (
+    BACKEND_POLICIES,
+    MANIFEST_SCHEMA_VERSION,
+    validate_v3_native_execution_request,
+)
 from scripts.deployment_map import DEPLOYMENT_MAP_SCHEMA_VERSION, DeploymentMapError, load_deployment_map
 from scripts.local_binding import BindingError, file_sha256, load_local_binding, path_sha256
 
@@ -276,6 +280,29 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
         self.binding_path.write_text(json.dumps(binding), encoding="utf-8")
         with self.assertRaisesRegex(WorkerError, "V3 native contract"):
             manifest_local_request(job, self.config)
+
+    def test_v3_native_descriptor_rejects_public_artifact_identity(self) -> None:
+        descriptor = {
+            "schema_version": "ida-native-execution-request.v1",
+            "run_id": "nf-12345678",
+            "profile_id": "edge-full",
+            "backend": "cuda",
+            "artifact_id": "canopy-foundry-cuda-v1",
+            "binary_name": "canopy_foundry_train",
+            "binary_sha256": "a" * 64,
+            "trainer_version": "ida-native-v3",
+            "policy_version": "policy-1",
+            "precision_profile": "legacy_bf16",
+            "optimizer_type": "adamw",
+            "attention_backend": "hopper_wgmma_packed_fp4",
+            "training_mode": "from_scratch",
+            "dataset_id": "dataset-001",
+            "resource_class": "gpu-standard",
+            "max_steps": 1,
+            "timeout_seconds": 60,
+        }
+        with self.assertRaisesRegex(ValueError, "artifact_id"):
+            validate_v3_native_execution_request(descriptor)
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -1147,11 +1174,32 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
                     "type": "complete",
                     "status": "complete",
                     "backend": metric_backend,
-                    "checkpoint_written": backend == "cuda",
                 }
                 if backend == "cuda":
+                    payload.update({
+                        "step": 1,
+                        "optimizer_steps": 1,
+                        "loss": 0.5,
+                        "learning_rate": 0.0003,
+                        "tokens": 2048,
+                        "tokens_per_second": 100.0,
+                        "grad_norm": 1.0,
+                        "checkpoint_written": True,
+                    })
                     payload["output"] = str(output.resolve())
                     (output / "model.safetensors").write_bytes(b"checkpoint")
+                else:
+                    payload.update({
+                        "device": "cpu" if backend == "cpu" else "AMD test device",
+                        "steps": 1,
+                        "loss": 0.5,
+                        "tokens": 2048,
+                        "tokens_per_second": 100.0,
+                        "parameters_changed": True,
+                        "checkpoint_written": False,
+                    })
+                    if backend == "cpu":
+                        payload.update({"kernel_variant": "scalar", "threads": 2})
                 (output / "metrics.json").write_text(json.dumps(payload), encoding="utf-8")
                 self.assertTrue(
                     completed_metrics(
@@ -1162,6 +1210,26 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
                         v3_native=True,
                     )
                 )
+
+    def test_v3_native_receipt_rejects_a_fabricated_completion_marker(self) -> None:
+        output = self.config.run_root / "nf-v3-fake123456"
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "metrics.json").write_text(json.dumps({
+            "type": "complete",
+            "status": "complete",
+            "backend": "native",
+            "checkpoint_written": True,
+            "output": str(output.resolve()),
+        }), encoding="utf-8")
+        self.assertFalse(
+            completed_metrics(
+                output,
+                run_id="nf-v3-fake123456",
+                expected_phase="native_smoke_complete",
+                backend="cuda",
+                v3_native=True,
+            )
+        )
 
     def test_v3_cuda_receipt_requires_worker_owned_output_and_checkpoint(self) -> None:
         output = self.config.run_root / "nf-v3-cuda123456"

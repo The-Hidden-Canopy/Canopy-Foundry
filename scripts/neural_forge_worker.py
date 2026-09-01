@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -1381,27 +1382,8 @@ def completed_metrics(
             continue
         if not isinstance(payload, dict):
             continue
-        if (
-            filename == "metrics.json"
-            and v3_native
-            and payload.get("backend") == V3_METRIC_BACKENDS.get(backend)
-            and payload.get("type") == "complete"
-            and payload.get("status") == "complete"
-            and isinstance(payload.get("checkpoint_written"), bool)
-            and (
-                (
-                    backend in {"cpu", "opencl"}
-                    and "output" not in payload
-                )
-                or _same_output_path(payload.get("output"), output_path)
-            )
-            and (
-                backend != "cuda"
-                or (
-                    payload.get("checkpoint_written") is True
-                    and (output_path / "model.safetensors").is_file()
-                )
-            )
+        if filename == "metrics.json" and v3_native and _valid_v3_native_metrics(
+            payload, output_path, backend
         ):
             return True
         if (
@@ -1424,6 +1406,64 @@ def completed_metrics(
         ):
             return True
     return False
+
+
+def _valid_v3_native_metrics(
+    payload: dict[str, Any], output_path: Path, backend: str
+) -> bool:
+    """Require the complete receipt shape emitted by the V3 native launchers."""
+
+    if payload.get("backend") != V3_METRIC_BACKENDS.get(backend):
+        return False
+    if payload.get("type") != "complete" or payload.get("status") != "complete":
+        return False
+    if not isinstance(payload.get("checkpoint_written"), bool):
+        return False
+
+    def positive_integer(value: Any) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+    def finite_number(value: Any, *, positive: bool = False) -> bool:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            return False
+        return not positive or value > 0
+
+    if backend == "cuda":
+        if not all(
+            positive_integer(payload.get(field))
+            for field in ("step", "optimizer_steps", "tokens")
+        ):
+            return False
+        if not all(
+            finite_number(payload.get(field), positive=field == "tokens_per_second")
+            for field in ("loss", "learning_rate", "tokens_per_second", "grad_norm")
+        ):
+            return False
+        return (
+            payload.get("checkpoint_written") is True
+            and _same_output_path(payload.get("output"), output_path)
+            and (output_path / "model.safetensors").is_file()
+        )
+
+    if backend not in {"cpu", "opencl"} or "output" in payload:
+        return False
+    if not isinstance(payload.get("device"), str) or not payload["device"].strip():
+        return False
+    if not positive_integer(payload.get("steps")) or not positive_integer(payload.get("tokens")):
+        return False
+    if not finite_number(payload.get("loss")) or not finite_number(
+        payload.get("tokens_per_second"), positive=True
+    ):
+        return False
+    if payload.get("checkpoint_written") is not False or not isinstance(
+        payload.get("parameters_changed"), bool
+    ):
+        return False
+    if backend == "cpu":
+        return positive_integer(payload.get("threads")) and isinstance(
+            payload.get("kernel_variant"), str
+        ) and bool(payload["kernel_variant"].strip())
+    return True
 
 
 def _same_output_path(value: Any, output_path: Path) -> bool:

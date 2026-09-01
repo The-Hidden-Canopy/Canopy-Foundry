@@ -44,6 +44,16 @@ BACKEND_POLICIES: dict[str, BackendPolicy] = {
 }
 
 
+# These identities belong to the private IDA Train v3 execution contract.
+# The public Foundry catalog intentionally uses different artifact IDs and
+# remains independently governed.
+V3_NATIVE_ARTIFACT_IDS = {
+    "cuda": "ida-native-cuda-v3",
+    "opencl": "ida-native-opencl-v3",
+    "cpu": "ida-native-cpu-v3",
+}
+
+
 # This is a private deployment contract, not an extension of the public
 # Foundry catalog.  It records the exact settings that a deployment has
 # elected to run from the V3 native engine.  The public catalog may continue
@@ -170,11 +180,21 @@ def validate_v3_native_execution_request(
         "optimizer_type": value["optimizer_type"],
         "attention_backend": value["attention_backend"],
     }, profile_id)
+    backend = contract["backend"]
+    artifact_id = _opaque_id(value["artifact_id"], "native execution request.artifact_id")
+    if artifact_id != V3_NATIVE_ARTIFACT_IDS[backend]:
+        raise ValueError("native execution request artifact_id is not a V3 artifact")
+    binary_name = _opaque_id(value["binary_name"], "native execution request.binary_name")
+    if binary_name not in {
+        BACKEND_POLICIES[backend].v3_binary_name,
+        BACKEND_POLICIES[backend].worker_binary_name,
+    }:
+        raise ValueError("native execution request binary_name is not approved")
     normalized: dict[str, Any] = {
         **contract,
         "run_id": run_id,
-        "artifact_id": _opaque_id(value["artifact_id"], "native execution request.artifact_id"),
-        "binary_name": _opaque_id(value["binary_name"], "native execution request.binary_name"),
+        "artifact_id": artifact_id,
+        "binary_name": binary_name,
         "binary_sha256": _hash(value["binary_sha256"], "native execution request.binary_sha256"),
         "trainer_version": _opaque_id(value["trainer_version"], "native execution request.trainer_version"),
         "policy_version": _opaque_id(value["policy_version"], "native execution request.policy_version"),
