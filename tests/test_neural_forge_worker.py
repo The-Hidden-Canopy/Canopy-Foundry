@@ -1038,6 +1038,40 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(calls, ["hub", "local"])
 
+    def test_terminal_update_reconciles_a_lost_hub_response(self) -> None:
+        calls: list[str] = []
+
+        class FakeClient:
+            def update(self, *_args: object, **_kwargs: object) -> None:
+                calls.append("hub")
+                raise WorkerError("response lost")
+
+            def get_worker_run(self, _run_id: str) -> dict[str, object]:
+                calls.append("status")
+                return {
+                    "run": {
+                        "run_id": "nf-12345678",
+                        "status": "succeeded",
+                        "evaluation": {"complete": True},
+                    },
+                    "cancel_requested": False,
+                }
+
+        class FakeReceiptStore:
+            def complete(self, *_args: object, **_kwargs: object) -> None:
+                calls.append("local")
+
+        publish_terminal_update(
+            FakeClient(),  # type: ignore[arg-type]
+            FakeReceiptStore(),  # type: ignore[arg-type]
+            "nf-12345678",
+            {"run_id": "nf-12345678"},
+            status="succeeded",
+            metrics_available=True,
+            event={"type": "process_exit", "status": "succeeded"},
+        )
+        self.assertEqual(calls, ["hub", "status", "local"])
+
     def test_execute_job_waits_for_evaluation_before_local_success_receipt(self) -> None:
         from unittest.mock import patch
 
