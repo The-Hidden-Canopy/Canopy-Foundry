@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 import re
 from typing import Any
 
@@ -44,60 +45,6 @@ BACKEND_POLICIES: dict[str, BackendPolicy] = {
 }
 
 
-# These identities belong to the private IDA Train v3 execution contract.
-# The public Foundry catalog intentionally uses different artifact IDs and
-# remains independently governed.
-V3_NATIVE_ARTIFACT_IDS = {
-    "cuda": "ida-native-cuda-v3",
-    "opencl": "ida-native-opencl-v3",
-    "cpu": "ida-native-cpu-v3",
-}
-
-
-# This is a private deployment contract, not an extension of the public
-# Foundry catalog.  It records the exact settings that a deployment has
-# elected to run from the V3 native engine.  The public catalog may continue
-# to expose only the stable scalar/Lion route.
-V3_NATIVE_PROFILE_CONTRACTS: dict[str, dict[str, str]] = {
-    "edge-full": {
-        "backend": "cuda",
-        "precision_profile": "legacy_bf16",
-        "optimizer_type": "adamw",
-        "attention_backend": "hopper_wgmma_packed_fp4",
-    },
-    "ai": {
-        "backend": "cuda",
-        "precision_profile": "legacy_fp8",
-        "optimizer_type": "adamw",
-        "attention_backend": "hopper_wgmma_packed_fp4",
-    },
-    "edge-swift": {
-        "backend": "cuda",
-        "precision_profile": "legacy_bf16",
-        "optimizer_type": "adamw",
-        "attention_backend": "scalar_flash",
-    },
-    "moe": {
-        "backend": "cuda",
-        "precision_profile": "legacy_fp8",
-        "optimizer_type": "adamw",
-        "attention_backend": "scalar_flash",
-    },
-    "opencl-smoke": {
-        "backend": "opencl",
-        "precision_profile": "fp32",
-        "optimizer_type": "adamw",
-        "attention_backend": "scalar_flash",
-    },
-    "cpu-smoke": {
-        "backend": "cpu",
-        "precision_profile": "fp32",
-        "optimizer_type": "adamw",
-        "attention_backend": "scalar_flash",
-    },
-}
-
-
 def _opaque_id(value: Any, label: str) -> str:
     if not isinstance(value, str) or not _ID_RE.fullmatch(value) or ".." in value:
         raise ValueError(f"{label} is invalid")
@@ -128,9 +75,6 @@ def validate_v3_profile_contract(
     profile_id = _opaque_id(profile_id, f"{label}.profile_id")
     if value.get("profile_id") != profile_id:
         raise ValueError(f"{label}.profile_id does not match Hub profile")
-    expected = V3_NATIVE_PROFILE_CONTRACTS.get(profile_id)
-    if expected is None:
-        raise ValueError(f"{label}.profile_id is not a V3 profile")
     normalized = {
         "schema_version": NATIVE_EXECUTION_REQUEST_SCHEMA_VERSION,
         "profile_id": profile_id,
@@ -139,9 +83,34 @@ def validate_v3_profile_contract(
         "optimizer_type": _opaque_id(value.get("optimizer_type"), f"{label}.optimizer_type"),
         "attention_backend": _opaque_id(value.get("attention_backend"), f"{label}.attention_backend"),
     }
-    if any(normalized[key] != expected[key] for key in expected):
-        raise ValueError(f"{label} does not match the V3 profile contract")
+    if normalized["backend"] not in BACKEND_POLICIES:
+        raise ValueError(f"{label}.backend is not a public Foundry backend")
     return normalized
+
+
+def _execution_binding(value: Any, label: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} is invalid")
+    backend = _opaque_id(value.get("backend"), f"{label}.backend")
+    artifact_id = _opaque_id(value.get("artifact_id"), f"{label}.artifact_id")
+    digest = _hash(value.get("binary_sha256"), f"{label}.binary_sha256")
+    if "binary_name" in value:
+        binary_names = [_opaque_id(value["binary_name"], f"{label}.binary_name")]
+    elif "binary_names" in value and isinstance(value["binary_names"], list) and value["binary_names"]:
+        binary_names = [
+            _opaque_id(item, f"{label}.binary_names[{index}]")
+            for index, item in enumerate(value["binary_names"])
+        ]
+    else:
+        raise ValueError(f"{label}.binary name is invalid")
+    if len(binary_names) != len(set(binary_names)):
+        raise ValueError(f"{label}.binary names contain duplicates")
+    return {
+        "backend": backend,
+        "artifact_id": artifact_id,
+        "binary_names": binary_names,
+        "binary_sha256": digest,
+    }
 
 
 def validate_v3_native_execution_request(
@@ -149,9 +118,13 @@ def validate_v3_native_execution_request(
     *,
     expected_run_id: str | None = None,
     expected_profile_id: str | None = None,
+    expected_contract: Mapping[str, Any] | None = None,
+    expected_execution: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Validate the private descriptor produced after canonical manifest validation."""
+    """Validate a descriptor against the deployment-owned V3 contract and binding."""
 
+    if expected_contract is None or expected_execution is None:
+        raise ValueError("V3 native execution request requires deployment bindings")
     if not isinstance(value, dict):
         raise ValueError("native execution request is invalid")
     required = {
@@ -172,30 +145,29 @@ def validate_v3_native_execution_request(
     profile_id = _opaque_id(value["profile_id"], "native execution request.profile_id")
     if expected_profile_id is not None and profile_id != _opaque_id(expected_profile_id, "expected profile_id"):
         raise ValueError("native execution request profile_id does not match deployment")
-    contract = validate_v3_profile_contract({
-        "schema_version": NATIVE_EXECUTION_REQUEST_SCHEMA_VERSION,
-        "profile_id": profile_id,
-        "backend": value["backend"],
-        "precision_profile": value["precision_profile"],
-        "optimizer_type": value["optimizer_type"],
-        "attention_backend": value["attention_backend"],
-    }, profile_id)
-    backend = contract["backend"]
+    contract = validate_v3_profile_contract(expected_contract, profile_id)
+    execution = _execution_binding(expected_execution, "expected execution")
+    backend = _opaque_id(value["backend"], "native execution request.backend")
+    if backend != contract["backend"] or backend != execution["backend"]:
+        raise ValueError("native execution request backend does not match deployment")
     artifact_id = _opaque_id(value["artifact_id"], "native execution request.artifact_id")
-    if artifact_id != V3_NATIVE_ARTIFACT_IDS[backend]:
-        raise ValueError("native execution request artifact_id is not a V3 artifact")
+    if artifact_id != execution["artifact_id"]:
+        raise ValueError("native execution request artifact_id does not match deployment")
     binary_name = _opaque_id(value["binary_name"], "native execution request.binary_name")
-    if binary_name not in {
-        BACKEND_POLICIES[backend].v3_binary_name,
-        BACKEND_POLICIES[backend].worker_binary_name,
-    }:
-        raise ValueError("native execution request binary_name is not approved")
+    if binary_name not in execution["binary_names"]:
+        raise ValueError("native execution request binary_name does not match deployment")
+    binary_sha256 = _hash(value["binary_sha256"], "native execution request.binary_sha256")
+    if binary_sha256 != execution["binary_sha256"]:
+        raise ValueError("native execution request binary_sha256 does not match deployment")
+    for key in ("precision_profile", "optimizer_type", "attention_backend"):
+        if _opaque_id(value[key], f"native execution request.{key}") != contract[key]:
+            raise ValueError("native execution request does not match the V3 deployment contract")
     normalized: dict[str, Any] = {
         **contract,
         "run_id": run_id,
         "artifact_id": artifact_id,
         "binary_name": binary_name,
-        "binary_sha256": _hash(value["binary_sha256"], "native execution request.binary_sha256"),
+        "binary_sha256": binary_sha256,
         "trainer_version": _opaque_id(value["trainer_version"], "native execution request.trainer_version"),
         "policy_version": _opaque_id(value["policy_version"], "native execution request.policy_version"),
         "training_mode": value["training_mode"],
@@ -258,6 +230,8 @@ def project_v3_native_execution_request(
         descriptor,
         expected_run_id=manifest.get("run_id"),
         expected_profile_id=profile_id,
+        expected_contract=contract,
+        expected_execution=execution,
     )
 
 

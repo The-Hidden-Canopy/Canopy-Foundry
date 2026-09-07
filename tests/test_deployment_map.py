@@ -25,10 +25,10 @@ class DeploymentMapTests(unittest.TestCase):
             "hub_profiles": {
                 profile_id: {
                     "local_profile_id": f"public-{profile_id}",
-                    "trainer_versions": ["ida-native-v3"],
+                    "trainer_versions": ["trainer-ref-v3"],
                     "execution": {
                         "backend": "cuda",
-                        "artifact_id": "ida-native-cuda-v3",
+                        "artifact_id": "artifact-ref-v3",
                         "binary_names": ["ida_native_train", "canopy_foundry_train"],
                     },
                 }
@@ -53,7 +53,7 @@ class DeploymentMapTests(unittest.TestCase):
     def test_duplicate_trainer_versions_and_unknown_backend_fail_closed(self) -> None:
         payload = self.valid_payload()
         payload["hub_profiles"]["edge-full"]["trainer_versions"] = [
-            "ida-native-v3", "ida-native-v3"
+            "trainer-ref-v3", "trainer-ref-v3"
         ]
         with self.assertRaises(DeploymentMapError):
             load_deployment_map(self.write(payload))
@@ -112,7 +112,7 @@ class DeploymentMapTests(unittest.TestCase):
         profile = deployment["hub_profiles"]["edge-full"]
         valid = {
             "backend": "cuda",
-            "artifact_id": "ida-native-cuda-v3",
+            "artifact_id": "artifact-ref-v3",
             "binary_name": "ida_native_train",
             "binary_sha256": "a" * 64,
         }
@@ -133,9 +133,9 @@ class DeploymentMapTests(unittest.TestCase):
             "schema_version": "ida-native-execution-request.v1",
             "profile_id": "edge-full",
             "backend": "cuda",
-            "precision_profile": "legacy_bf16",
-            "optimizer_type": "adamw",
-            "attention_backend": "hopper_wgmma_packed_fp4",
+            "precision_profile": "precision-ref-v3",
+            "optimizer_type": "optimizer-ref-v3",
+            "attention_backend": "attention-ref-v3",
         }
         with self.assertRaisesRegex(DeploymentMapError, "binary_sha256 is required"):
             load_deployment_map(self.write(payload))
@@ -145,7 +145,7 @@ class DeploymentMapTests(unittest.TestCase):
         self.assertEqual(profile["native_execution"]["profile_id"], "edge-full")
         valid = {
             "backend": "cuda",
-            "artifact_id": "ida-native-cuda-v3",
+            "artifact_id": "artifact-ref-v3",
             "binary_name": "ida_native_train",
             "binary_sha256": "a" * 64,
         }
@@ -155,27 +155,31 @@ class DeploymentMapTests(unittest.TestCase):
         with self.assertRaises(DeploymentMapError):
             validate_execution_attestation(candidate, "edge-full", profile)
 
-    def test_v3_native_contract_rejects_silent_profile_translation_or_local_fields(self) -> None:
+    def test_v3_native_contract_is_external_and_rejects_local_fields(self) -> None:
         payload = self.valid_payload()
         payload["hub_profiles"]["edge-full"]["native_execution"] = {
             "schema_version": "ida-native-execution-request.v1",
             "profile_id": "edge-full",
             "backend": "cuda",
-            "precision_profile": "legacy_bf16",
-            "optimizer_type": "lion",
-            "attention_backend": "scalar_flash",
+            "precision_profile": "precision-ref-v3",
+            "optimizer_type": "optimizer-ref-v3",
+            "attention_backend": "attention-ref-v3",
         }
-        with self.assertRaises(DeploymentMapError):
-            load_deployment_map(self.write(payload))
+        payload["hub_profiles"]["edge-full"]["execution"]["binary_sha256"] = "a" * 64
+        deployment = load_deployment_map(self.write(payload))
+        self.assertEqual(
+            deployment["hub_profiles"]["edge-full"]["native_execution"]["optimizer_type"],
+            "optimizer-ref-v3",
+        )
 
         payload = self.valid_payload()
         payload["hub_profiles"]["edge-full"]["native_execution"] = {
             "schema_version": "ida-native-execution-request.v1",
             "profile_id": "edge-full",
             "backend": "cuda",
-            "precision_profile": "legacy_bf16",
-            "optimizer_type": "adamw",
-            "attention_backend": "hopper_wgmma_packed_fp4",
+            "precision_profile": "precision-ref-v3",
+            "optimizer_type": "optimizer-ref-v3",
+            "attention_backend": "attention-ref-v3",
             "output_dir": "private",
         }
         with self.assertRaises(DeploymentMapError):

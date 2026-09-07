@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 _FORBIDDEN_PATH = (
-    re.compile(r"(^|/)(?:build|bin|runs|data|datasets|artifacts|worker-state|secrets)(?:/|$)"),
+    re.compile(r"(^|/)(?:build|bin|runs|data|datasets|artifacts|worker-state|secrets|\.private-evidence)(?:/|$)"),
     re.compile(r"(^|/)configs/(?:local|private)(?:/|$)"),
     re.compile(r"(^|/)(?:\.git|\.pytest_cache|__pycache__)(?:/|$)"),
     re.compile(
@@ -26,6 +26,12 @@ _FORBIDDEN_PATH = (
     ),
     re.compile(r"(?:\.bak[^/]*|\.orig|\.rej|\.log|\.jsonl|\.u32|\.i32|\.u16)$"),
     re.compile(r"(?:\.safetensors|\.pt|\.pth|\.ckpt|\.onnx|\.sqlite3?|\.db)$"),
+    re.compile(
+        r"(^|/)(?:" + "v2" + r"_native\.py|test_" + "v2" + r"_native(?:_worker)?\.py)$"
+    ),
+    re.compile(
+        r"(^|/)(?:" + "private" + r"_native\.py|test_private" + r"_native(?:_worker)?\.py)$"
+    ),
 )
 _FORBIDDEN_CONTENT = (
     (re.compile(r"hf_[A-Za-z0-9]{20,}"), "token-shaped Hugging Face credential"),
@@ -34,7 +40,14 @@ _FORBIDDEN_CONTENT = (
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), "private key material"),
     (re.compile(r"(?:E:|C:)\\(?:HiddenCanopy|Users)\\"), "machine-specific Windows path"),
     (re.compile(r"/(?:home/ubuntu|workspace)/"), "machine-specific Unix path"),
-    (re.compile(r"IDA[-_]TRAIN[-_]V2"), "blackboard dependency reference"),
+    (
+        re.compile(r"\bIDA(?:[-_ ]+TRAIN)?[-_ ]+V2(?:[-_. ]|$)", re.IGNORECASE),
+        "legacy private native identifier",
+    ),
+    (
+        re.compile(r"\b" + "v2" + r"_native\b", re.IGNORECASE),
+        "private adapter identifier",
+    ),
     (
         re.compile(
             r"wgmma\." + r"mma_async|mma\.sync\.aligned\.m16n8k64"

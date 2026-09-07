@@ -354,6 +354,17 @@ checkpoints, or raw stderr. Hub redirects are rejected, responses are bounded,
 and the child process runs in a dedicated process group so timeout cleanup
 does not leave descendants running.
 
+Every successful worker update also carries a path-free
+`neural-foundry-run-receipt-ref.v2` reference. The reference is bound to the
+canonical manifest fingerprint and has its own identity hash. For a private
+deployment, it contains only opaque evidence references and hashes; profile
+settings, source details, device claims, and native diagnostics remain in the
+deployment-owned evidence store. The Hub stores only this bounded reference
+and rejects a successful update that is missing, stale, cross-run, or
+inconsistent with the canonical execution attestation. A receipt hash is
+execution reconciliation evidence, not proof of a native run or promotion
+readiness by itself.
+
 Each worker status mutation carries an opaque `operation_id`. The Hub records
 that receipt together with the job and event mutation using compare-and-swap.
 The worker may safely retry the exact same operation; the Hub returns the
@@ -446,21 +457,45 @@ binding, and measured binary hash to agree. A V3 profile that would otherwise
 require AdamW or WGMMA is rejected unless this private contract is present and
 matched. It is never downgraded to the public Lion/scalar route.
 
-The ignored deployment map contains IDs and execution allowlists only; it
-must not contain paths, commands, model bytes, credentials, or training
-settings:
+Deployment-owned private native profiles use the same canonical Hub envelope
+but a distinct, versioned private projection schema:
+`neural-forge-private-native-execution-request.v1`. The projection is
+structurally validated in this public worker, while its exact profile,
+artifact, binary, recipe, source, hardware, and native-setting values are
+provided only by the deployment-owned map. Private entries must be marked
+`visibility: "private"`, use opaque aliases, pin the measured binary digest,
+and carry a complete path-free recipe/source attestation. The corresponding
+`private_profiles` binding supplies the local config, optional kernel, and a
+SHA-256-pinned native source-manifest file. The worker verifies those pins
+before adding local paths to the native request. The projection never
+contains Hub authority, organization, worker identity, justification,
+credentials, lifecycle, audit, evaluation evidence, or promotion fields.
+
+The local receipt store validates detailed native evidence against the
+already-approved private projection and writes it only to the ignored,
+deployment-owned evidence directory. The Hub receipt reference carries no
+native descriptor or evidence object. Unsupported optimizer, attention,
+backend, architecture, or training-mode substitutions fail closed; public
+catalog entries and public execution routes are not translated or expanded.
+A local unit test or synthetic device record is not native hardware or
+promotion evidence.
+
+The ignored deployment map contains opaque IDs and execution allowlists only;
+it must not contain paths, commands, model bytes, credentials, or training
+settings. The concrete values are deployment-owned and are not published in
+this repository:
 
 ```json
 {
   "schema_version": "neural-foundry-deployment-map.v1",
   "hub_profiles": {
-    "edge-full": {
-      "local_profile_id": "public-edge-full",
-      "trainer_versions": ["ida-native-v3"],
+    "<hub-profile-alias>": {
+      "local_profile_id": "<local-profile-alias>",
+      "trainer_versions": ["<opaque-trainer-alias>"],
       "execution": {
         "backend": "cuda",
-        "artifact_id": "ida-native-cuda-v3",
-        "binary_names": ["ida_native_train", "canopy_foundry_train"]
+        "artifact_id": "<opaque-artifact-alias>",
+        "binary_names": ["<approved-binary-alias>"]
       }
     }
   },
@@ -485,17 +520,17 @@ placeholder is intentionally not executable):
 {
   "execution": {
     "backend": "cuda",
-    "artifact_id": "ida-native-cuda-v3",
-    "binary_names": ["ida_native_train"],
+    "artifact_id": "<opaque-artifact-alias>",
+    "binary_names": ["<approved-binary-alias>"],
     "binary_sha256": "<sha256 of the approved V3 binary>"
   },
   "native_execution": {
     "schema_version": "ida-native-execution-request.v1",
-    "profile_id": "edge-full",
+    "profile_id": "<hub-profile-alias>",
     "backend": "cuda",
-    "precision_profile": "legacy_bf16",
-    "optimizer_type": "adamw",
-    "attention_backend": "hopper_wgmma_packed_fp4"
+    "precision_profile": "<opaque-precision-alias>",
+    "optimizer_type": "<opaque-optimizer-alias>",
+    "attention_backend": "<opaque-attention-alias>"
   }
 }
 ```

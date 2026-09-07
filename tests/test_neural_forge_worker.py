@@ -59,7 +59,7 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
             "hub_profiles": {
                 profile_id: {
                     "local_profile_id": profile_id,
-                    "trainer_versions": ["ida-native-v3"],
+                        "trainer_versions": ["trainer-ref-v3"],
                     "execution": {
                         "backend": backend,
                         "artifact_id": BACKEND_POLICIES[backend].artifact_id,
@@ -140,7 +140,7 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
         resource_class: str = "gpu-standard",
         backend: str = "cuda",
         binary_path: Path | None = None,
-        trainer_version: str = "ida-native-v3",
+        trainer_version: str = "trainer-ref-v3",
         base_model_id: str | None = None,
         checkpoint_id: str | None = None,
         request_overrides: dict[str, object] | None = None,
@@ -166,8 +166,11 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
             "training_profile_id": profile_id,
             "trainer_version": trainer_version,
             "resource_class": resource_class,
+            "quota_id": "quota-gpu-standard",
             "max_steps": 1,
             "timeout_seconds": 60,
+            "max_concurrency": 1,
+            "required_evaluation_gates": [],
         }
         if policy_overrides:
             policy.update(policy_overrides)
@@ -197,8 +200,8 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
                 "worker_subject": "worker",
                 "authority": {
                     "subject": "user-001",
-                    "role": "researcher",
-                    "capability_scopes": ["neural-forge.submit"],
+                    "role": "operator",
+                    "capability_scopes": ["neural_forge.run.submit"],
                     "justification_hash": "a" * 64,
                 },
                 "execution": self.execution(backend, binary_path),
@@ -213,14 +216,14 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
 
         config_path = self.config.config_root / "examples" / "small.json"
         config = json.loads(config_path.read_text(encoding="utf-8"))
-        config["attention_backend"] = "hopper_wgmma_packed_fp4"
+        config["attention_backend"] = "attention-ref-v3"
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
         binding = json.loads(self.binding_path.read_text(encoding="utf-8"))
         binding["profiles"]["cuda-local"].update({
             "sha256": file_sha256(config_path),
-            "precision": "legacy_bf16",
-            "optimizer": "adamw",
+            "precision": "precision-ref-v3",
+            "optimizer": "optimizer-ref-v3",
         })
         self.binding_path.write_text(json.dumps(binding), encoding="utf-8")
 
@@ -230,10 +233,10 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
             "hub_profiles": {
                 "edge-full": {
                     "local_profile_id": "cuda-local",
-                    "trainer_versions": ["ida-native-v3"],
+                    "trainer_versions": ["trainer-ref-v3"],
                     "execution": {
                         "backend": "cuda",
-                        "artifact_id": "ida-native-cuda-v3",
+                        "artifact_id": "artifact-ref-v3",
                         "binary_names": ["ida_native_train"],
                         "binary_sha256": binary_sha256,
                     },
@@ -241,19 +244,19 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
                         "schema_version": "ida-native-execution-request.v1",
                         "profile_id": "edge-full",
                         "backend": "cuda",
-                        "precision_profile": "legacy_bf16",
-                        "optimizer_type": "adamw",
-                        "attention_backend": "hopper_wgmma_packed_fp4",
+                        "precision_profile": "precision-ref-v3",
+                        "optimizer_type": "optimizer-ref-v3",
+                        "attention_backend": "attention-ref-v3",
                     },
                 },
             },
             "resource_classes": {"gpu-standard": {"device": 0}},
         }), encoding="utf-8")
 
-        job = self.manifest_job(profile_id="edge-full")
+        job = self.manifest_job(profile_id="edge-full", trainer_version="trainer-ref-v3")
         job["worker_manifest"]["execution"] = {
             "backend": "cuda",
-            "artifact_id": "ida-native-cuda-v3",
+            "artifact_id": "artifact-ref-v3",
             "binary_name": "ida_native_train",
             "binary_sha256": binary_sha256,
         }
@@ -263,17 +266,17 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
         job = self.v3_native_job()
         local_request, _, _, resolved = manifest_local_request(job, self.config)
         self.assertEqual(resolved["native_execution"]["schema_version"], "ida-native-execution-request.v1")
-        self.assertEqual(resolved["native_execution"]["optimizer_type"], "adamw")
-        self.assertEqual(resolved["native_execution"]["attention_backend"], "hopper_wgmma_packed_fp4")
+        self.assertEqual(resolved["native_execution"]["optimizer_type"], "optimizer-ref-v3")
+        self.assertEqual(resolved["native_execution"]["attention_backend"], "attention-ref-v3")
         command, output_path = build_command(job, self.config)
         self.assertTrue(command)
         descriptor = json.loads((output_path / "native-execution-request.json").read_text(encoding="utf-8"))
         self.assertEqual(descriptor["profile_id"], "edge-full")
-        self.assertEqual(descriptor["optimizer_type"], "adamw")
+        self.assertEqual(descriptor["optimizer_type"], "optimizer-ref-v3")
         self.assertNotIn("authority", descriptor)
         native_request = json.loads((output_path / "native-request.json").read_text(encoding="utf-8"))
-        self.assertEqual(native_request["optimizer_type"], "adamw")
-        self.assertEqual(native_request["attention_backend"], "hopper_wgmma_packed_fp4")
+        self.assertEqual(native_request["optimizer_type"], "optimizer-ref-v3")
+        self.assertEqual(native_request["attention_backend"], "attention-ref-v3")
         for field in ("repo_root", "status_file", "job_id", "expected_terminal_phase"):
             self.assertNotIn(field, native_request)
 
@@ -282,23 +285,27 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
         binding = json.loads(self.binding_path.read_text(encoding="utf-8"))
         binding["profiles"]["cuda-local"]["optimizer"] = "lion"
         self.binding_path.write_text(json.dumps(binding), encoding="utf-8")
-        with self.assertRaisesRegex(WorkerError, "V3 native contract"):
+        with self.assertRaisesRegex(WorkerError, "native contract"):
             manifest_local_request(job, self.config)
 
     def test_v3_native_descriptor_rejects_public_artifact_identity(self) -> None:
+        job = self.v3_native_job()
+        deployment = load_deployment_map(self.deployment_map_path)
+        contract = deployment["hub_profiles"]["edge-full"]["native_execution"]
+        execution = job["worker_manifest"]["execution"]
         descriptor = {
             "schema_version": "ida-native-execution-request.v1",
             "run_id": "nf-12345678",
             "profile_id": "edge-full",
             "backend": "cuda",
-            "artifact_id": "canopy-foundry-cuda-v1",
+            "artifact_id": "public-artifact-ref",
             "binary_name": "canopy_foundry_train",
             "binary_sha256": "a" * 64,
-            "trainer_version": "ida-native-v3",
+            "trainer_version": "trainer-ref-v3",
             "policy_version": "policy-1",
-            "precision_profile": "legacy_bf16",
-            "optimizer_type": "adamw",
-            "attention_backend": "hopper_wgmma_packed_fp4",
+            "precision_profile": "precision-ref-v3",
+            "optimizer_type": "optimizer-ref-v3",
+            "attention_backend": "attention-ref-v3",
             "training_mode": "from_scratch",
             "dataset_id": "dataset-001",
             "resource_class": "gpu-standard",
@@ -306,7 +313,11 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
             "timeout_seconds": 60,
         }
         with self.assertRaisesRegex(ValueError, "artifact_id"):
-            validate_v3_native_execution_request(descriptor)
+            validate_v3_native_execution_request(
+                descriptor,
+                expected_contract=contract,
+                expected_execution=execution,
+            )
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -508,6 +519,22 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(WorkerError):
                 build_command(job, self.config)
 
+    def test_manifest_requires_canonical_authority_and_policy_controls(self) -> None:
+        invalid_jobs = []
+        role = json.loads(json.dumps(self.manifest_job()))
+        role["worker_manifest"]["authority"]["role"] = "viewer"
+        invalid_jobs.append(("authority role", role))
+        scopes = json.loads(json.dumps(self.manifest_job()))
+        scopes["worker_manifest"]["authority"]["capability_scopes"] = []
+        invalid_jobs.append(("authority scopes", scopes))
+        for field in ("quota_id", "max_concurrency", "required_evaluation_gates"):
+            missing = json.loads(json.dumps(self.manifest_job()))
+            missing["worker_manifest"]["policy"].pop(field)
+            invalid_jobs.append((f"policy {field}", missing))
+        for label, job in invalid_jobs:
+            with self.subTest(label=label), self.assertRaises(WorkerError):
+                build_command(job, self.config)
+
     def test_legacy_v3_same_name_manifest_is_rejected_explicitly(self) -> None:
         legacy = {
             "schema_version": MANIFEST_SCHEMA_VERSION,
@@ -611,8 +638,8 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
                 "worker_subject": "worker",
                 "authority": {
                     "subject": "user-001",
-                    "role": "researcher",
-                    "capability_scopes": ["neural-forge.submit"],
+                    "role": "operator",
+                    "capability_scopes": ["neural_forge.run.submit"],
                     "justification_hash": "a" * 64,
                 },
                 "execution": self.execution(),
@@ -620,16 +647,19 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
                 "policy": {
                     "policy_version": "policy-1",
                     "training_profile_id": "cuda-local",
-                    "trainer_version": "ida-native-v3",
+                    "trainer_version": "trainer-ref-v3",
                     "resource_class": "gpu-standard",
+                    "quota_id": "quota-gpu-standard",
                     "max_steps": 1,
                     "timeout_seconds": 60,
+                    "max_concurrency": 1,
+                    "required_evaluation_gates": [],
                 },
                 "lineage": {
                     "dataset": {"id": "dataset-001"},
                     "reproducibility": {
                         "policy_version": "policy-1", "training_profile_id": "cuda-local",
-                        "trainer_version": "ida-native-v3", "training_mode": "from_scratch",
+                        "trainer_version": "trainer-ref-v3", "training_mode": "from_scratch",
                         "dataset_id": "dataset-001", "resource_class": "gpu-standard",
                     },
                 },
@@ -684,10 +714,10 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
             "hub_profiles": {
                 "edge-full": {
                     "local_profile_id": "public-edge-full",
-                    "trainer_versions": ["ida-native-v3"],
+                    "trainer_versions": ["trainer-ref-v3"],
                     "execution": {
                         "backend": "cuda",
-                        "artifact_id": "ida-native-cuda-v3",
+                        "artifact_id": "artifact-ref-v3",
                         "binary_names": ["ida_native_train", "canopy_foundry_train"],
                     },
                 },
@@ -711,7 +741,7 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
         job = self.manifest_job(profile_id="edge-full")
         job["worker_manifest"]["execution"] = {
             "backend": "cuda",
-            "artifact_id": "ida-native-cuda-v3",
+            "artifact_id": "artifact-ref-v3",
             "binary_name": "ida_native_train",
             "binary_sha256": file_sha256(self.binary_path),
         }
@@ -786,21 +816,23 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
             "run_id": "nf-12345678", **self.manifest_window(),
             "org": "org.example", "worker_subject": "worker",
             "authority": {
-                "subject": "user-001", "role": "researcher",
-                "capability_scopes": ["neural-forge.submit"],
+                "subject": "user-001", "role": "operator",
+                "capability_scopes": ["neural_forge.run.submit"],
                 "justification_hash": "a" * 64,
             },
             "execution": self.execution(),
             "policy": {
                 "policy_version": "policy-1", "training_profile_id": "cuda-local",
-                "trainer_version": "ida-native-v3", "resource_class": "gpu-standard",
+                "trainer_version": "trainer-ref-v3", "resource_class": "gpu-standard",
+                "quota_id": "quota-gpu-standard",
                 "max_steps": 1, "timeout_seconds": 60,
+                "max_concurrency": 1, "required_evaluation_gates": [],
             },
             "lineage": {
                 "dataset": {"id": "dataset-001"},
                 "reproducibility": {
                     "policy_version": "policy-1", "training_profile_id": "cuda-local",
-                    "trainer_version": "ida-native-v3", "training_mode": "from_scratch",
+                    "trainer_version": "trainer-ref-v3", "training_mode": "from_scratch",
                     "dataset_id": "dataset-001", "resource_class": "gpu-standard",
                 },
             },
@@ -900,12 +932,12 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
                 **self.manifest_window(),
                 "org": "org.example", "worker_subject": "worker", "execution": self.execution(),
                 "authority": {
-                    "subject": "user-001", "role": "researcher",
-                    "capability_scopes": ["neural-forge.submit"],
+                    "subject": "user-001", "role": "operator",
+                    "capability_scopes": ["neural_forge.run.submit"],
                     "justification_hash": "a" * 64,
                 },
                 "request": {"training_profile_id": "cuda-local", "dataset_id": "dataset-001", "resource_class": "gpu-standard"},
-                "policy": {"policy_version": "policy-1", "training_profile_id": "cuda-local", "trainer_version": "ida-native-v3", "resource_class": "gpu-standard", "max_steps": 1, "timeout_seconds": 60},
+                "policy": {"policy_version": "policy-1", "training_profile_id": "cuda-local", "trainer_version": "trainer-ref-v3", "resource_class": "gpu-standard", "quota_id": "quota-gpu-standard", "max_steps": 1, "timeout_seconds": 60, "max_concurrency": 1, "required_evaluation_gates": []},
                 "lineage": {},
             }
         }
@@ -1018,10 +1050,14 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
 
     def test_terminal_update_commits_hub_before_local_receipt(self) -> None:
         calls: list[str] = []
+        receipt_refs: list[dict[str, object]] = []
 
         class FakeClient:
             def update(self, *_args: object, **_kwargs: object) -> None:
                 calls.append("hub")
+                receipt = _kwargs.get("execution_receipt")
+                if isinstance(receipt, dict):
+                    receipt_refs.append(receipt)
 
         class FakeReceiptStore:
             def complete(self, *_args: object, **_kwargs: object) -> None:
@@ -1037,13 +1073,21 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
             event={"type": "process_exit", "status": "succeeded"},
         )
         self.assertEqual(calls, ["hub", "local"])
+        self.assertEqual(receipt_refs[0]["schema_version"], "neural-foundry-run-receipt-ref.v2")
+        self.assertNotIn("path", json.dumps(receipt_refs[0]).lower())
 
     def test_terminal_update_reconciles_a_lost_hub_response(self) -> None:
         calls: list[str] = []
 
         class FakeClient:
+            def __init__(self) -> None:
+                self.receipt_sha256 = None
+
             def update(self, *_args: object, **_kwargs: object) -> None:
                 calls.append("hub")
+                receipt = _kwargs.get("execution_receipt")
+                if isinstance(receipt, dict):
+                    self.receipt_sha256 = receipt.get("receipt_sha256")
                 raise WorkerError("response lost")
 
             def get_worker_run(self, _run_id: str) -> dict[str, object]:
@@ -1053,6 +1097,7 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
                         "run_id": "nf-12345678",
                         "status": "succeeded",
                         "evaluation": {"complete": True},
+                        "execution_receipt_sha256": self.receipt_sha256,
                     },
                     "cancel_requested": False,
                 }
@@ -1084,7 +1129,26 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
                 "expected_terminal_phase": "native_smoke_complete",
             }), encoding="utf-8"
         )
-        (output / "native-execution-request.json").write_text("{}", encoding="utf-8")
+        (output / "native-execution-request.json").write_text(json.dumps({
+            "schema_version": "ida-native-execution-request.v1",
+            "run_id": run_id,
+            "profile_id": "edge-full",
+            "backend": "cuda",
+            "artifact_id": "artifact-ref-v3",
+            "binary_name": "ida_native_train",
+            "binary_sha256": "a" * 64,
+            "trainer_version": "trainer-ref-v3",
+            "policy_version": "policy-1",
+            "precision_profile": "precision-ref-v3",
+            "optimizer_type": "optimizer-ref-v3",
+            "attention_backend": "attention-ref-v3",
+            "training_mode": "from_scratch",
+            "dataset_id": "dataset-001",
+            "resource_class": "gpu-standard",
+            "max_steps": 1,
+            "timeout_seconds": 60,
+            "model_contract_id": "hf_gpt2_native_v1",
+        }, indent=2), encoding="utf-8")
         job = {
             "run_id": run_id,
             "worker_manifest": {
@@ -1109,6 +1173,7 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.status_calls = 0
                 self.updates: list[tuple[str, dict[str, object] | None]] = []
+                self.execution_receipts: list[dict[str, object]] = []
 
             def get_worker_run(self, _run_id: str) -> dict[str, object]:
                 self.status_calls += 1
@@ -1122,19 +1187,47 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
                 }
 
             def update(self, _run_id: str, *, status: str, event: dict[str, object] | None = None,
-                       **_kwargs: object) -> None:
+                       **kwargs: object) -> None:
                 self.updates.append((status, event))
+                receipt = kwargs.get("execution_receipt")
+                if isinstance(receipt, dict):
+                    self.execution_receipts.append(receipt)
 
         client = FakeClient()
+        v3_contract = {
+            "schema_version": "ida-native-execution-request.v1",
+            "profile_id": "edge-full",
+            "backend": "cuda",
+            "precision_profile": "precision-ref-v3",
+            "optimizer_type": "optimizer-ref-v3",
+            "attention_backend": "attention-ref-v3",
+        }
+        v3_execution = {
+            "backend": "cuda",
+            "artifact_id": "artifact-ref-v3",
+            "binary_name": "ida_native_train",
+            "binary_sha256": "a" * 64,
+        }
         with patch(
             "scripts.neural_forge_worker.build_command",
             return_value=([sys.executable, "-c", child_code, str(output)], output),
+        ), patch(
+            "scripts.neural_forge_worker.manifest_local_request",
+            return_value=({}, Path(), Path(), {
+                "native_contract": v3_contract,
+                "execution": v3_execution,
+            }),
         ), patch("scripts.neural_forge_worker.time.sleep"):
             execute_job(job, replace(self.config, poll_seconds=0.05), client)  # type: ignore[arg-type]
 
         self.assertEqual(client.updates[0][0], "running")
         self.assertEqual(client.updates[-1][0], "succeeded")
         self.assertEqual([status for status, _ in client.updates].count("succeeded"), 1)
+        self.assertGreaterEqual(len(client.execution_receipts), 2)
+        self.assertEqual(
+            {receipt["receipt_sha256"] for receipt in client.execution_receipts},
+            {client.execution_receipts[0]["receipt_sha256"]},
+        )
         receipt = json.loads((self.config.run_root / ".receipts" / f"{run_id}.json").read_text())
         self.assertEqual(receipt["status"], "succeeded")
         self.assertGreaterEqual(client.status_calls, 2)
@@ -1185,6 +1278,9 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
         ), patch(
             "scripts.neural_forge_worker.terminate_process_tree",
             side_effect=lambda process: process.kill(),
+        ), patch(
+            "scripts.neural_forge_worker.manifest_local_request",
+            return_value=({}, Path(), Path(), {"native_contract": None}),
         ), patch("scripts.neural_forge_worker.time.sleep"):
             execute_job(job, replace(self.config, poll_seconds=0.05), client)  # type: ignore[arg-type]
 
@@ -1312,17 +1408,17 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
                 "org": "org.example",
                 "execution": self.execution(),
                 "authority": {
-                    "subject": "user-001", "role": "researcher",
-                    "capability_scopes": ["neural-forge.submit"],
+                "subject": "user-001", "role": "operator",
+                "capability_scopes": ["neural_forge.run.submit"],
                     "justification_hash": "a" * 64,
                 },
                 "request": {"training_profile_id": "cuda-local", "dataset_id": "dataset-001", "resource_class": "gpu-standard"},
-                "policy": {"policy_version": "policy-1", "training_profile_id": "cuda-local", "trainer_version": "ida-native-v3", "resource_class": "gpu-standard", "max_steps": 1, "timeout_seconds": 60},
+                "policy": {"policy_version": "policy-1", "training_profile_id": "cuda-local", "trainer_version": "trainer-ref-v3", "resource_class": "gpu-standard", "quota_id": "quota-gpu-standard", "max_steps": 1, "timeout_seconds": 60, "max_concurrency": 1, "required_evaluation_gates": []},
                 "lineage": {
                     "dataset": {"id": "dataset-001"},
                     "reproducibility": {
                         "policy_version": "policy-1", "training_profile_id": "cuda-local",
-                        "trainer_version": "ida-native-v3", "training_mode": "from_scratch",
+                        "trainer_version": "trainer-ref-v3", "training_mode": "from_scratch",
                         "dataset_id": "dataset-001", "resource_class": "gpu-standard",
                     },
                 },
@@ -1381,13 +1477,13 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
                 "run_id": "nf-12345678", **self.manifest_window(),
                 "org": "org.example", "worker_subject": "worker",
                 "authority": {
-                    "subject": "user-001", "role": "researcher",
-                    "capability_scopes": ["neural-forge.submit"],
+                    "subject": "user-001", "role": "operator",
+                    "capability_scopes": ["neural_forge.run.submit"],
                     "justification_hash": "a" * 64,
                 },
                 "execution": self.execution(),
                 "request": {"training_profile_id": "cuda-local", "dataset_id": "dataset-001", "resource_class": "gpu-standard"},
-                "policy": {"policy_version": "policy-1", "training_profile_id": "cuda-local", "trainer_version": "v3", "resource_class": "gpu-standard", "max_steps": 1, "timeout_seconds": 60},
+                "policy": {"policy_version": "policy-1", "training_profile_id": "cuda-local", "trainer_version": "v3", "resource_class": "gpu-standard", "quota_id": "quota-gpu-standard", "max_steps": 1, "timeout_seconds": 60, "max_concurrency": 1, "required_evaluation_gates": []},
                 "lineage": {
                     "dataset": {"id": "dataset-001"},
                     "reproducibility": {
@@ -1621,8 +1717,8 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
                 "run_id": "nf-opencl12345678", **self.manifest_window(),
                 "org": "org.example", "worker_subject": "worker",
                 "authority": {
-                    "subject": "user-001", "role": "researcher",
-                    "capability_scopes": ["neural-forge.submit"],
+                    "subject": "user-001", "role": "operator",
+                    "capability_scopes": ["neural_forge.run.submit"],
                     "justification_hash": "a" * 64,
                 },
                 "lineage": {
@@ -1635,7 +1731,7 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
                 },
                 "execution": self.execution("opencl", portable_binary),
                 "request": {"training_profile_id": "opencl-smoke", "dataset_id": "dataset-001", "resource_class": "gpu-standard"},
-                "policy": {"policy_version": "policy-1", "training_profile_id": "opencl-smoke", "trainer_version": "v3", "resource_class": "gpu-standard", "max_steps": 3, "timeout_seconds": 60},
+                "policy": {"policy_version": "policy-1", "training_profile_id": "opencl-smoke", "trainer_version": "v3", "resource_class": "gpu-standard", "quota_id": "quota-gpu-standard", "max_steps": 3, "timeout_seconds": 60, "max_concurrency": 1, "required_evaluation_gates": []},
             },
         }
         with self.assertRaises(WorkerError):
