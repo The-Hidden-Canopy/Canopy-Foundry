@@ -164,6 +164,77 @@ class PublicBoundaryTests(unittest.TestCase):
         self.assertTrue(any("private/generated path is publishable" in item for item in findings))
         self.assertTrue(any("private kernel instruction" in item for item in findings))
 
+    def test_boundary_rejects_legacy_private_native_identifier(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "configs" / "public").mkdir(parents=True)
+            (root / "configs" / "public" / "capabilities.json").write_text(
+                json.dumps({
+                    "profiles": {
+                        "cpu-smoke": {
+                            "backend": "cpu",
+                            "enabled": False,
+                            "supported_optimizers": [],
+                        }
+                    }
+                }),
+                encoding="utf-8",
+            )
+            private_reference = root / "legacy.txt"
+            private_reference.write_text("IDA " + "Train " + "v2 private profile\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
+
+            findings = check_boundary(root)
+
+        self.assertTrue(any("legacy private native identifier" in item for item in findings))
+
+    def test_boundary_rejects_private_adapter_identifier(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "configs" / "public").mkdir(parents=True)
+            (root / "configs" / "public" / "capabilities.json").write_text(
+                json.dumps({
+                    "profiles": {
+                        "cpu-smoke": {
+                            "backend": "cpu",
+                            "enabled": False,
+                            "supported_optimizers": [],
+                        }
+                    }
+                }),
+                encoding="utf-8",
+            )
+            private_reference = root / "adapter.txt"
+            private_reference.write_text("v2" + "_native\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
+
+            findings = check_boundary(root)
+
+        self.assertTrue(any("private adapter identifier" in item for item in findings))
+
+    def test_boundary_rejects_concrete_private_adapter_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "configs" / "public").mkdir(parents=True)
+            (root / "configs" / "public" / "capabilities.json").write_text(
+                json.dumps({
+                    "profiles": {
+                        "cpu-smoke": {
+                            "backend": "cpu",
+                            "enabled": False,
+                            "supported_optimizers": [],
+                        }
+                    }
+                }),
+                encoding="utf-8",
+            )
+            (root / ("private" + "_native.py")).write_text("# deployment-only\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
+
+            findings = check_boundary(root)
+
+        self.assertTrue(any("private/generated path is publishable" in item for item in findings))
+
     def test_history_mode_rejects_reachable_private_source_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -118,7 +118,10 @@ def _private_runtime_entry(value: Any, label: str) -> dict[str, str]:
 
 def _profile_entry(value: Any, label: str) -> dict[str, str]:
     entry = _record(value, label)
-    allowed = {"ref", "sha256", "precision", "optimizer", "kernel_ref"}
+    allowed = {
+        "ref", "sha256", "precision", "optimizer", "kernel_ref", "kernel_sha256",
+        "source_manifest_ref", "source_manifest_sha256",
+    }
     if set(entry) - allowed or "ref" not in entry:
         raise BindingError(f"{label} fields are invalid")
     result = _entry({key: entry[key] for key in ("ref", "sha256") if key in entry}, label)
@@ -127,6 +130,46 @@ def _profile_entry(value: Any, label: str) -> dict[str, str]:
             result[field] = _id(entry[field], f"{label}.{field}")
     if "kernel_ref" in entry:
         result["kernel_ref"] = _relative_ref(entry["kernel_ref"], f"{label}.kernel_ref")
+    if "kernel_sha256" in entry:
+        result["kernel_sha256"] = _sha256(entry["kernel_sha256"], f"{label}.kernel_sha256")
+    if ("source_manifest_ref" in entry) != ("source_manifest_sha256" in entry):
+        raise BindingError(f"{label} source manifest attestation is incomplete")
+    if "source_manifest_ref" in entry:
+        result["source_manifest_ref"] = _relative_ref(
+            entry["source_manifest_ref"], f"{label}.source_manifest_ref"
+        )
+        result["source_manifest_sha256"] = _sha256(
+            entry["source_manifest_sha256"], f"{label}.source_manifest_sha256"
+        )
+    return result
+
+
+def _private_adapter_profile_entry(value: Any, label: str) -> dict[str, Any]:
+    entry = _record(value, label)
+    required = {
+        "binary_ref", "binary_sha256", "source_manifest_ref", "source_manifest_sha256",
+        "recipe_ref", "recipe_sha256", "hardware_evidence_requirements",
+    }
+    allowed = required | {"wip_snapshot_sha256"}
+    if set(entry) - allowed or not required.issubset(entry):
+        raise BindingError(f"{label} fields are invalid")
+    requirements = entry["hardware_evidence_requirements"]
+    if not isinstance(requirements, list) or not requirements:
+        raise BindingError(f"{label}.hardware_evidence_requirements is invalid")
+    normalized_requirements = [_id(item, f"{label}.hardware_evidence_requirements[{index}]") for index, item in enumerate(requirements)]
+    if len(normalized_requirements) != len(set(normalized_requirements)):
+        raise BindingError(f"{label}.hardware_evidence_requirements contains duplicates")
+    result: dict[str, Any] = {
+        "binary_ref": _relative_ref(entry["binary_ref"], f"{label}.binary_ref"),
+        "binary_sha256": _sha256(entry["binary_sha256"], f"{label}.binary_sha256"),
+        "source_manifest_ref": _relative_ref(entry["source_manifest_ref"], f"{label}.source_manifest_ref"),
+        "source_manifest_sha256": _sha256(entry["source_manifest_sha256"], f"{label}.source_manifest_sha256"),
+        "recipe_ref": _relative_ref(entry["recipe_ref"], f"{label}.recipe_ref"),
+        "recipe_sha256": _sha256(entry["recipe_sha256"], f"{label}.recipe_sha256"),
+        "hardware_evidence_requirements": normalized_requirements,
+    }
+    if "wip_snapshot_sha256" in entry:
+        result["wip_snapshot_sha256"] = _sha256(entry["wip_snapshot_sha256"], f"{label}.wip_snapshot_sha256")
     return result
 
 
@@ -213,7 +256,7 @@ def load_local_binding(path: Path) -> dict[str, Any]:
         "schema_version", "catalog_version", "catalog_sha256", "profiles",
         "datasets", "models", "checkpoints", "binaries",
     }
-    allowed = required | {"hardware_probes", "private_runtimes"}
+    allowed = required | {"hardware_probes", "private_runtimes", "private_profiles", "private_adapter_profiles"}
     if set(payload) - allowed:
         raise BindingError("local binding fields are invalid")
     result = {
@@ -232,6 +275,20 @@ def load_local_binding(path: Path) -> dict[str, Any]:
     result["private_runtimes"] = {
         _id(key, f"private_runtimes id"): _private_runtime_entry(value, f"private_runtimes.{key}")
         for key, value in raw_private_runtimes.items()
+    }
+    raw_private_profiles = _record(payload.get("private_profiles", {}), "local binding private_profiles")
+    result["private_profiles"] = {
+        _id(key, f"private_profiles id"): _profile_entry(value, f"private_profiles.{key}")
+        for key, value in raw_private_profiles.items()
+    }
+    raw_adapter_profiles = _record(
+        payload.get("private_adapter_profiles", {}), "local binding private_adapter_profiles"
+    )
+    result["private_adapter_profiles"] = {
+        _id(key, f"private_adapter_profiles id"): _private_adapter_profile_entry(
+            value, f"private_adapter_profiles.{key}"
+        )
+        for key, value in raw_adapter_profiles.items()
     }
     if "hardware_probes" in payload:
         raw_probes = _record(payload["hardware_probes"], "local binding hardware_probes")

@@ -8,6 +8,7 @@
 /.deps/
 /private-runtime/
 /.private-runtime/
+/.private-evidence/
 *.bak*
 *.a
 *.dll

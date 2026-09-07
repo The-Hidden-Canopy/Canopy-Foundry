@@ -16,15 +16,21 @@ from typing import Any
 try:
     from scripts.compatibility import (
         BACKEND_POLICIES,
+        NATIVE_EXECUTION_REQUEST_SCHEMA_VERSION,
         validate_v3_profile_contract,
     )
+    from scripts.private_adapter import PrivateAdapterError, load_private_adapter
     from scripts.model_contracts import validate_model_contract_id
     from scripts.private_runtime import validate_optional_private_runtime
 except ModuleNotFoundError:
-    from compatibility import BACKEND_POLICIES, validate_v3_profile_contract
+    from compatibility import (
+        BACKEND_POLICIES,
+        NATIVE_EXECUTION_REQUEST_SCHEMA_VERSION,
+        validate_v3_profile_contract,
+    )
+    from private_adapter import PrivateAdapterError, load_private_adapter
     from model_contracts import validate_model_contract_id
     from private_runtime import validate_optional_private_runtime
-
 
 DEPLOYMENT_MAP_SCHEMA_VERSION = "neural-foundry-deployment-map.v1"
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -69,7 +75,7 @@ def _execution(value: Any, label: str) -> dict[str, Any]:
     if not required.issubset(entry) or set(entry) - allowed:
         raise DeploymentMapError(f"{label} fields are invalid")
     backend = _id(entry["backend"], f"{label}.backend")
-    if backend not in BACKEND_POLICIES:
+    if backend not in BACKEND_POLICIES and backend != "hip":
         raise DeploymentMapError(f"{label}.backend is invalid")
     normalized = {
         "backend": backend,
@@ -106,7 +112,7 @@ def load_deployment_map(path: Path) -> dict[str, Any]:
         entry = _record(raw, f"Hub profile {profile_id}")
         required_profile = {"local_profile_id", "trainer_versions", "execution"}
         allowed_profile = required_profile | {
-            "model_contract_ids", "private_runtime", "native_execution"
+            "model_contract_ids", "private_runtime", "native_execution", "private_execution", "visibility"
         }
         if not required_profile.issubset(entry) or set(entry) - allowed_profile:
             raise DeploymentMapError(f"Hub profile {profile_id} fields are invalid")
@@ -125,29 +131,88 @@ def load_deployment_map(path: Path) -> dict[str, Any]:
             ),
             "execution": _execution(entry["execution"], f"Hub profile {profile_id}.execution"),
         }
-        if "native_execution" in entry:
+        visibility = entry.get("visibility", "public")
+        if visibility not in {"public", "private"}:
+            raise DeploymentMapError(f"Hub profile {profile_id}.visibility is invalid")
+        normalized["visibility"] = visibility
+        native_kind: str | None = None
+        if normalized["execution"]["backend"] == "hip" and \
+                "native_execution" not in entry and "private_execution" not in entry:
+            raise DeploymentMapError(
+                f"Hub profile {profile_id}.hip execution requires a private execution adapter"
+            )
+        if "native_execution" in entry and "private_execution" in entry:
+            raise DeploymentMapError(f"Hub profile {profile_id} cannot select two private native contracts")
+        if "private_execution" in entry:
             try:
+                adapter = load_private_adapter()
+                if adapter is None:
+                    raise DeploymentMapError(
+                        f"Hub profile {profile_id}.private_execution requires a private deployment adapter"
+                    )
+                normalized["private_execution"] = adapter.validate_profile_contract(
+                    entry["private_execution"], profile_id, f"Hub profile {profile_id}.private_execution"
+                )
+            except (PrivateAdapterError, ValueError) as exc:
+                raise DeploymentMapError(str(exc)) from exc
+            native_kind = "adapter"
+            if "binary_sha256" not in normalized["execution"]:
+                raise DeploymentMapError(
+                    f"Hub profile {profile_id}.execution.binary_sha256 is required for private execution"
+                )
+            if normalized["private_execution"]["execution"] != {
+                "backend": normalized["execution"]["backend"],
+                "artifact_id": normalized["execution"]["artifact_id"],
+                "binary_name": normalized["execution"]["binary_names"][0],
+                "binary_sha256": normalized["execution"]["binary_sha256"],
+            } and not (
+                normalized["private_execution"]["execution"]["backend"] == normalized["execution"]["backend"] and
+                normalized["private_execution"]["execution"]["artifact_id"] == normalized["execution"]["artifact_id"] and
+                normalized["private_execution"]["execution"]["binary_name"] in normalized["execution"]["binary_names"] and
+                normalized["private_execution"]["execution"]["binary_sha256"] == normalized["execution"]["binary_sha256"]
+            ):
+                raise DeploymentMapError(f"Hub profile {profile_id}.private_execution does not match execution")
+            if visibility != "private":
+                raise DeploymentMapError(f"Hub profile {profile_id}.private execution must be private")
+            normalized["native_execution_kind"] = native_kind
+        elif "native_execution" in entry:
+            try:
+                schema_version = entry["native_execution"].get("schema_version") if isinstance(entry["native_execution"], dict) else None
+                if schema_version != NATIVE_EXECUTION_REQUEST_SCHEMA_VERSION:
+                    raise DeploymentMapError(
+                        f"Hub profile {profile_id}.native_execution schema is invalid"
+                    )
                 normalized["native_execution"] = validate_v3_profile_contract(
                     entry["native_execution"],
                     profile_id,
                     f"Hub profile {profile_id}.native_execution",
                 )
+                native_kind = "v3"
             except ValueError as exc:
                 raise DeploymentMapError(str(exc)) from exc
             if "binary_sha256" not in normalized["execution"]:
                 raise DeploymentMapError(
-                    f"Hub profile {profile_id}.execution.binary_sha256 is required for V3 native execution"
+                    f"Hub profile {profile_id}.execution.binary_sha256 is required for {native_kind} native execution"
                 )
             if normalized["native_execution"]["backend"] != normalized["execution"]["backend"]:
                 raise DeploymentMapError(
                     f"Hub profile {profile_id}.native_execution backend does not match execution"
                 )
+            normalized["native_execution_kind"] = native_kind
+        elif normalized["execution"]["backend"] not in BACKEND_POLICIES:
+            raise DeploymentMapError(
+                f"Hub profile {profile_id}.execution.backend is not a public backend"
+            )
         if "model_contract_ids" in entry:
             try:
-                contracts = [
-                    validate_model_contract_id(item, f"Hub profile {profile_id}.model_contract_ids[{index}]")
-                    for index, item in enumerate(_id_list(entry["model_contract_ids"], f"Hub profile {profile_id}.model_contract_ids"))
-                ]
+                raw_contracts = _id_list(entry["model_contract_ids"], f"Hub profile {profile_id}.model_contract_ids")
+                if native_kind == "adapter":
+                    contracts = raw_contracts
+                else:
+                    contracts = [
+                        validate_model_contract_id(item, f"Hub profile {profile_id}.model_contract_ids[{index}]")
+                        for index, item in enumerate(raw_contracts)
+                    ]
             except ValueError as exc:
                 raise DeploymentMapError(str(exc)) from exc
             normalized["model_contract_ids"] = contracts
@@ -167,12 +232,19 @@ def load_deployment_map(path: Path) -> dict[str, Any]:
     for resource_id, raw in resources.items():
         resource_id = _id(resource_id, "resource class id")
         entry = _record(raw, f"resource class {resource_id}")
-        if set(entry) != {"device"}:
+        if set(entry) - {"device", "devices"} or ("device" not in entry and "devices" not in entry):
             raise DeploymentMapError(f"resource class {resource_id} fields are invalid")
-        device = entry["device"]
-        if isinstance(device, bool) or not isinstance(device, int) or not 0 <= device <= 255:
-            raise DeploymentMapError(f"resource class {resource_id}.device is invalid")
-        normalized_resources[resource_id] = {"device": device}
+        if "device" in entry and "devices" in entry:
+            raise DeploymentMapError(f"resource class {resource_id} has conflicting device bindings")
+        devices = entry.get("devices", [entry.get("device")])
+        if not isinstance(devices, list) or not devices or any(
+            isinstance(device, bool) or not isinstance(device, int) or not 0 <= device <= 255
+            for device in devices
+        ) or len(devices) != len(set(devices)):
+            raise DeploymentMapError(f"resource class {resource_id}.devices is invalid")
+        normalized_resources[resource_id] = {"device": devices[0]}
+        if "devices" in entry:
+            normalized_resources[resource_id]["devices"] = devices
 
     return {
         "schema_version": DEPLOYMENT_MAP_SCHEMA_VERSION,
@@ -190,10 +262,13 @@ def validate_model_contract_binding(
 
     if contract_id is None:
         return None
-    try:
-        normalized = validate_model_contract_id(contract_id, "worker manifest model_contract_id")
-    except ValueError as exc:
-        raise DeploymentMapError(str(exc)) from exc
+    if profile.get("native_execution_kind") == "adapter":
+        normalized = _id(contract_id, "worker manifest model_contract_id")
+    else:
+        try:
+            normalized = validate_model_contract_id(contract_id, "worker manifest model_contract_id")
+        except ValueError as exc:
+            raise DeploymentMapError(str(exc)) from exc
     allowed = profile.get("model_contract_ids")
     if allowed is not None and normalized not in allowed:
         raise DeploymentMapError(f"model contract does not match profile {profile_id}")
