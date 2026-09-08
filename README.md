@@ -240,7 +240,13 @@ into the public repository. See [the local cache guide](docs/hf-git-cache.md).
 Neural Foundry performs no hidden login, automatic model retrieval, or
 background upload.
 
-## Support the Work
+## Public Hub
+
+- [Neural Foundry overview](https://thehiddencanopy.com/neural-forge.html)
+- [Canopy-Foundry release notes](https://thehiddencanopy.com/updates.html#release-notes)
+- [Support Canopy-Foundry](https://thehiddencanopy.com/flight-deck.html#support)
+
+## Support Canopy-Foundry
 
 Donations help fund continued research and development across The Hidden
 Canopy ecosystem, including Neural Foundry, local training infrastructure,
@@ -251,7 +257,7 @@ hardware, and releasing useful capability publicly without turning user data
 or private training environments into the product.
 
 If you would like to support the work, donations can be made through the
-[PayPal link on the Hidden Canopy Hub](https://thehiddencanopy.com/flight-deck.html#support).
+[Support Canopy-Foundry on the Hidden Canopy Hub](https://thehiddencanopy.com/flight-deck.html#support).
 
 ## What Neural Foundry Is Not
 
