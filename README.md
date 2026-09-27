@@ -205,9 +205,20 @@ Worker events are:
 - free of raw stdout and stderr
 - separated from private analytics and ontology paths
 
-Leaderboard participation, where available, is opt-in and intended to expose
-only approved public identifiers, sanitized hardware information, approved
-metrics, and a deployment fingerprint.
+Kernel telemetry is disabled by default. An operator may pass
+`--kernel-telemetry DIR` to the native executable; this enables the bounded
+V2-style kernel ontology stream and writes a local bundle containing
+`kernel_ontology.jsonl`, `training_metrics.jsonl`, and `receipt.json`. The
+native binary never performs a network request. The public IDA CLI can validate
+and explicitly upload that directory with `ida telemetry share-kernel`.
+The bundle records launch geometry, host-enqueue timing, and step diagnostics
+for the public launch sites wrapped by the ontology macro;
+it does not claim device elapsed kernel time, hardware-counter occupancy, or
+promotion eligibility. Paths, datasets, checkpoints, credentials, identifiers,
+raw logs, and private diagnostics remain local.
+The producer fails closed if the ontology stream would exceed 32 MiB or 250,000
+records, and the CLI does not send a bearer token unless `--send-token` is
+paired with an explicit `--url`.
 
 ## Portability
 
@@ -224,7 +235,12 @@ treated as production-equivalent backends.
 
 ## Getting Started
 
-New users should begin with the included:
+If you are learning the repository rather than operating an already configured
+worker, start with the [learning path](docs/learning-path.md). It builds a
+mental model of the public boundary, request flow, and safe exercises before
+you work through the operator commands below.
+
+New users should then begin with the included:
 
 - [starter guide](STARTER_GUIDE.md)
 - public example configurations in `configs/examples/`

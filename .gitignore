@@ -30,8 +30,8 @@
 worker-config.json
 native-request.json
 
-# Deployment-owned private observability overlay; public builds use
-# include-public/ida_native no-op contracts instead.
+# Deployment-owned private observability overlay; public builds use the
+# bounded include-public/ida_native kernel telemetry contract instead.
 /include/ida_native/ontology.hpp
 /include/ida_native/gemm_trace.hpp
 /include/ida_native/pack_trace.hpp

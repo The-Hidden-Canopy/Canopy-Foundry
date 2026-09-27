@@ -14,8 +14,16 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 #include <cublasLt.h>
 #include <cuda_runtime.h>
@@ -27,6 +35,7 @@
 #include "ida_native/cuda_check.hpp"
 #include "ida_native/device_info.hpp"
 #include "ida_native/backend_contract.hpp"
+#include "ida_native/ontology.hpp"
 #include "ida_native/request.hpp"
 #include "ida_native/status.hpp"
 #include "ida_native/telemetry.hpp"
@@ -38,6 +47,7 @@ using json = nlohmann::json;
 
 struct Args {
     std::optional<std::filesystem::path> request_json;
+    std::optional<std::filesystem::path> kernel_telemetry;
     bool self_check{false};
     int device_id{0};
     int require_cuda_arch{90};
@@ -48,10 +58,11 @@ struct Args {
 void print_usage() {
     ida_native::print_cli_welcome(std::cout);
     std::cout
-        << "Usage: ida_native_train --request-json REQUEST.json [--device GPU]\n"
+        << "Usage: ida_native_train --request-json REQUEST.json [--device GPU] [--kernel-telemetry DIR]\n"
         << "       ida_native_train --self-check [--device GPU]\n"
         << "\n"
         << "This public binary performs one-shot native training only.\n"
+        << "--kernel-telemetry enables a bounded V2-style local kernel telemetry bundle; it never uploads.\n"
         << "Private Hub transports and orchestration are not part of this executable.\n";
 }
 
@@ -65,6 +76,9 @@ Args parse_args(int argc, char** argv) {
         } else if (token == "--request-json") {
             if (i + 1 >= argc) throw std::runtime_error("--request-json requires a path");
             args.request_json = std::filesystem::path(argv[++i]);
+        } else if (token == "--kernel-telemetry") {
+            if (i + 1 >= argc) throw std::runtime_error("--kernel-telemetry requires a directory");
+            args.kernel_telemetry = std::filesystem::path(argv[++i]);
         } else if (token == "--self-check") {
             args.self_check = true;
         } else if (token == "--device") {
@@ -82,6 +96,57 @@ Args parse_args(int argc, char** argv) {
         }
     }
     return args;
+}
+
+void configure_kernel_telemetry(const std::filesystem::path& output_dir) {
+    if (output_dir.empty()) throw std::runtime_error("kernel telemetry directory is empty");
+    const auto resolved = std::filesystem::absolute(output_dir).lexically_normal();
+    const auto reject_linked_components = [&resolved] {
+        for (auto current = resolved; !current.empty();) {
+            std::error_code component_error;
+            if (std::filesystem::is_symlink(current, component_error)) {
+                throw std::runtime_error("kernel telemetry directory must not pass through a link");
+            }
+            if (component_error &&
+                component_error != std::make_error_code(std::errc::no_such_file_or_directory)) {
+                throw std::runtime_error("unable to inspect kernel telemetry directory path");
+            }
+#if defined(_WIN32)
+            const auto attributes = GetFileAttributesW(current.c_str());
+            if (attributes != INVALID_FILE_ATTRIBUTES &&
+                (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+                throw std::runtime_error("kernel telemetry directory must not pass through a reparse point");
+            }
+            if (attributes == INVALID_FILE_ATTRIBUTES) {
+                const auto win_error = GetLastError();
+                if (win_error != ERROR_FILE_NOT_FOUND && win_error != ERROR_PATH_NOT_FOUND) {
+                    throw std::runtime_error("unable to inspect kernel telemetry directory path");
+                }
+            }
+#endif
+            const auto parent = current.parent_path();
+            if (parent == current) break;
+            current = parent;
+        }
+    };
+    reject_linked_components();
+    std::error_code path_error;
+    if (std::filesystem::is_symlink(resolved, path_error) || path_error) {
+        throw std::runtime_error("kernel telemetry directory must not be a link");
+    }
+    if (std::filesystem::exists(resolved) && !std::filesystem::is_directory(resolved)) {
+        throw std::runtime_error("kernel telemetry path must be a directory");
+    }
+    if (std::filesystem::exists(resolved) && !std::filesystem::is_empty(resolved)) {
+        throw std::runtime_error("kernel telemetry directory must be empty");
+    }
+    std::error_code error;
+    std::filesystem::create_directories(resolved, error);
+    if (error) throw std::runtime_error("unable to create kernel telemetry directory");
+    reject_linked_components();
+#if !IDA_NATIVE_ENABLE_PRIVATE_OBSERVABILITY
+    ida_native::ontology::enable_local_export(resolved / "kernel_ontology.jsonl");
+#endif
 }
 
 // Enables mapped (zero-copy) host memory for this device context. Must run
@@ -535,6 +600,7 @@ bool preserve_failure_phase(const std::filesystem::path& status_file) {
 }
 
 void execute_burn(
+    const Args& args,
     const ida_native::NativeRequest& request,
     ida_native::NativeArena& arena,
     ida_native::NativeArena* second_stage = nullptr
@@ -874,6 +940,9 @@ void execute_burn(
             std::string("\"promotion_eligible\": ") + (promotion_eligible ? "true" : "false")
         }
     );
+    if (args.kernel_telemetry) {
+        ida_native::write_shareable_kernel_telemetry(*args.kernel_telemetry, request, result);
+    }
 }
 
 }  // namespace
@@ -882,12 +951,26 @@ int main(int argc, char** argv) {
     try {
         const auto args = parse_args(argc, argv);
         ida_native::print_cli_welcome(std::cerr);
+#if IDA_NATIVE_ENABLE_PRIVATE_OBSERVABILITY
+        if (args.kernel_telemetry) {
+            throw std::runtime_error(
+                "--kernel-telemetry is available only in the bounded public build; "
+                "use the private observability contract for deployment-owned captures");
+        }
+#endif
         if (args.self_check) {
+            if (args.kernel_telemetry) {
+                throw std::runtime_error("--kernel-telemetry requires a training run, not --self-check");
+            }
             run_self_check(args);
             return 0;
         }
         if (!args.request_json.has_value()) {
             throw std::runtime_error("usage: ida_native_train --request-json <path>");
+        }
+
+        if (args.kernel_telemetry) {
+            configure_kernel_telemetry(*args.kernel_telemetry);
         }
 
         const auto request = ida_native::load_request(*args.request_json);
@@ -910,7 +993,7 @@ int main(int argc, char** argv) {
             (void)ida_native::runtime_device_info(second_device);
         }
         try {
-            execute_burn(request, arena, second_stage ? &*second_stage : nullptr);
+            execute_burn(args, request, arena, second_stage ? &*second_stage : nullptr);
         } catch (const std::exception& exc) {
             // One-shot mode has no worker loop to report through: without a
             // terminal failure phase in the status file, the Python client

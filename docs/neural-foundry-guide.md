@@ -6,8 +6,10 @@ admission helper.
 
 It is not an authority or governance plane. Authentication, organization
 scope, role tier, justification, state transitions, audit/domain events,
-approval, process supervision, resource limits, and telemetry publication
-belong to the governed external wrapper.
+approval, process supervision, resource limits, and governed telemetry
+publication belong to the governed external wrapper. The public runtime has a
+separate, bounded kernel-telemetry export that is disabled by default and is
+local unless an operator explicitly hands its bundle to `IDA_CLI-Public`.
 
 The execution contract has three explicit backend identifiers: full CUDA, AMD
 OpenCL smoke, and native CPU smoke. Only CUDA is currently enabled for
@@ -59,8 +61,12 @@ governed wrapper records the result and performs any promotion transition
 ```
 
 The admission helper does not bind a socket, accept bearer tokens, launch a
-child process, or publish telemetry. There is no Neural Foundry HTTP endpoint
-to configure, expose, or protect.
+child process, or expose an HTTP endpoint. There is no Neural Foundry HTTP
+service to configure, expose, or protect. A caller may explicitly pass
+`--kernel-telemetry DIR` to the public executable; that opt-in writes only a
+fresh, bounded local bundle. The native process never uploads it. The separate
+`IDA_CLI-Public telemetry share-kernel` command validates the receipt and
+performs the only explicit transport to an operator-supplied HTTPS endpoint.
 
 The Hub is the only remote control-plane surface. Its worker claim response
 contains two separate objects: a public run projection and an approved worker
@@ -609,20 +615,25 @@ that does not match its parent, and the worker enforces the approved
 Build the public native target with private observability disabled. The
 canonical public build also sets `CANOPY_FOUNDRY_PUBLIC_BUILD=ON` and fails
 configuration if a stale cache enables private observability; it can therefore
-never enter a native burn requiring ontology or analytics sinks. A private
-deployment may explicitly set
+never enter a native burn requiring private ontology or analytics sinks. The
+public `include-public/ida_native/` contract still supports the bounded,
+local-only `--kernel-telemetry` opt-in described above. A private deployment
+may explicitly set
 `-DCANOPY_FOUNDRY_PUBLIC_BUILD=OFF -DIDA_NATIVE_ENABLE_PRIVATE_OBSERVABILITY=ON`;
 that binary and its binding remain deployment-owned and must not be used as
 public release evidence or copied into the public repository.
 The private observability headers are ignored local overlay files; public
-builds resolve the no-op contracts under `include-public/ida_native/` instead.
+builds resolve the bounded public contract under `include-public/ida_native/`
+instead.
 The public CPU boundary can be configured with `cmake --preset public-cpu` and
 built with `cmake --build --preset public-cpu`.
 
 Do not copy Hub policy JSON, bearer tokens, private training code, or absolute
 paths into the public catalog or native request. Private Flight Deck
-entitlements and donation/telemetry APIs remain Hub-owned and are not callable
-from Neural Foundry.
+entitlements and its server-side telemetry projection remain Hub-owned and are
+not callable from Neural Foundry. The public CLI share command is an
+independent, explicit transport of the bounded Foundry bundle; it does not
+create a Hub receiver or a promotion record.
 
 ### Hub evaluator and leaderboard provisioning
 

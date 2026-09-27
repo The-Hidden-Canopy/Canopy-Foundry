@@ -13,7 +13,7 @@ products or authority layers.
 
 | Layer | Owns | Must not receive |
 | --- | --- | --- |
-| Canopy Foundry | Native C++/CUDA runtime, local assets, request admission, bounded status | Organization authority, promotion decisions, Hub policy, raw private telemetry |
+| Canopy Foundry | Native C++/CUDA runtime, local assets, request admission, bounded status, opt-in local public telemetry export | Organization authority, promotion decisions, Hub policy, raw or private telemetry, network credentials |
 | Hidden Canopy Hub | Authentication, organization/role permissions, job admission, opaque IDs, bounded status API | Local filesystem paths, dataset bytes, checkpoints, private kernels, raw stderr |
 | Evidence blackboard | Reference history and evidence | Runtime imports, direct writes, public release dependencies |
 
@@ -26,11 +26,15 @@ The published tree may contain:
 - safe example configurations and deterministic contract fixtures;
 - the offline request-admission helper;
 - the local worker contract, which publishes bounded status only;
+- the bounded local kernel-telemetry contract, which is disabled by default;
 - build, test, and boundary-review documentation.
 
 The `api/` directory is deliberately not an HTTP API. It must not bind a
-socket, accept bearer tokens, launch a child process, publish telemetry, or
-make organization, role, audit, transition, or promotion decisions.
+socket, accept bearer tokens, launch a child process, expose a telemetry
+endpoint, or make organization, role, audit, transition, or promotion
+decisions. The native executable can write a bounded telemetry bundle only
+when an operator explicitly supplies `--kernel-telemetry DIR`; it never
+uploads that bundle.
 
 ## Local-only contents
 
@@ -40,7 +44,12 @@ These remain on the training machine and are ignored by Git:
 - worker bindings and generated request manifests;
 - datasets, model weights, checkpoints, binaries, and run output;
 - private observability headers and deployment-owned toolchains;
-- credentials, certificates, raw stdout/stderr, and detailed telemetry.
+- credentials, certificates, raw stdout/stderr, and detailed/private telemetry.
+
+The public bundle is not generated or tracked by the repository. If an
+operator explicitly chooses to share it, `IDA_CLI-Public` validates the fresh
+bundle and POSTs it only to the operator-supplied HTTPS endpoint. This is a
+transport action, not Hub authorization, audit, or promotion evidence.
 
 Local references cross the Hub boundary as opaque IDs. The worker resolves
 those IDs through its local binding, verifies integrity pins, and sends back

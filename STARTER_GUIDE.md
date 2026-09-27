@@ -1,5 +1,8 @@
 # Canopy Foundry Starter Guide
 
+If you are new to the codebase, begin with the [learning path](docs/learning-path.md)
+before using this operator-oriented guide.
+
 This guide builds and invokes the native runtime directly. The former
 loopback adapter in `api/native_api.py` is retired; the governed wrapper still
 owns authority, execution, audit, and promotion.
@@ -95,7 +98,36 @@ output directory. CPU and OpenCL smoke binaries emit bounded JSONL events on
 stdout. Existing output and incomplete resume checkpoints are rejected rather
 than treated as successful or reused.
 
-## 5. Wrapper boundary
+## 5. Optional local kernel telemetry
+
+Kernel telemetry is a separate, local-only opt-in. It is disabled unless the
+operator supplies `--kernel-telemetry DIR` on a successful CUDA training run:
+
+```sh
+bin/ida_native_train \
+  --request-json /absolute/path/to/request.json \
+  --device 0 \
+  --kernel-telemetry /absolute/path/to/fresh-telemetry
+```
+
+Foundry writes a fresh directory containing `kernel_ontology.jsonl`,
+`training_metrics.jsonl`, and `receipt.json`. The bounded public schema covers
+launch geometry, host enqueue observations, and step diagnostics. It does not
+claim device elapsed kernel time, hardware-counter profiling, or promotion
+eligibility. A non-empty output directory is rejected so records from separate
+runs cannot be mixed. The producer fails closed at 32 MiB or 250,000 ontology
+records and does not write a valid receipt after a telemetry write failure. The
+public executable ignores ambient `IDA_NATIVE_ONTOLOGY` settings; only the
+explicit flag arms the in-process local export.
+
+The split is intentional: Canopy Foundry is the local producer and never makes
+a network request; `IDA_CLI-Public` is the explicit validator and transport.
+Inspect without network access using `ida telemetry share-kernel DIR
+--dry-run`, or share only to an operator-supplied HTTPS endpoint with
+`ida telemetry share-kernel DIR --url https://host/path`. There is no default
+receiver, background upload, or credential persistence.
+
+## 6. Wrapper boundary
 
 The external Python wrapper owns config translation, process supervision,
 operator-facing policy, and governed control-plane integration. The exact
