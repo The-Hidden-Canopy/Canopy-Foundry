@@ -113,6 +113,7 @@ add_executable(ida_native_train
   src/request.cpp
   src/status.cpp
   src/arena.cu
+  src/execution/plan.cpp
   src/trainer.cu
   src/checkpoint.cpp
   src/telemetry.cpp
@@ -291,6 +292,60 @@ endif()
 if(IDA_NATIVE_ENABLE_AMD)
   add_subdirectory(amd)
 endif()
+
+# Planner foundation -------------------------------------------------------
+#
+# This target is intentionally available even when CUDA is not installed. It
+# resolves a request into a bounded, deterministic execution description and
+# reports unavailable build/runtime capabilities instead of pretending that
+# source presence is hardware evidence. It does not allocate model state or
+# launch a backend.
+set(CANOPY_FOUNDRY_BUILD_CUDA 0)
+if(IDA_NATIVE_CUDA_FOUND)
+  set(CANOPY_FOUNDRY_BUILD_CUDA 1)
+endif()
+set(CANOPY_FOUNDRY_BUILD_OPENCL 0)
+if(TARGET ida_native_opencl_train)
+  set(CANOPY_FOUNDRY_BUILD_OPENCL 1)
+endif()
+set(CANOPY_FOUNDRY_BUILD_CPU 0)
+if(TARGET ida_native_cpu_train)
+  set(CANOPY_FOUNDRY_BUILD_CPU 1)
+endif()
+
+add_executable(foundry_plan
+  tools/foundry_plan.cpp
+  src/execution/plan.cpp
+  src/request.cpp
+)
+target_include_directories(foundry_plan PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/include-public
+)
+target_compile_definitions(foundry_plan PRIVATE
+  CANOPY_FOUNDRY_BUILD_CUDA=${CANOPY_FOUNDRY_BUILD_CUDA}
+  CANOPY_FOUNDRY_BUILD_OPENCL=${CANOPY_FOUNDRY_BUILD_OPENCL}
+  CANOPY_FOUNDRY_BUILD_CPU=${CANOPY_FOUNDRY_BUILD_CPU}
+)
+target_link_libraries(foundry_plan PRIVATE nlohmann_json::nlohmann_json)
+set_target_properties(foundry_plan PROPERTIES OUTPUT_NAME "foundry")
+
+add_executable(foundry_execution_plan_test
+  tests/execution/execution_plan_test.cpp
+  src/execution/plan.cpp
+  src/request.cpp
+)
+target_include_directories(foundry_execution_plan_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/include-public
+)
+target_compile_definitions(foundry_execution_plan_test PRIVATE
+  CANOPY_FOUNDRY_BUILD_CUDA=1
+  CANOPY_FOUNDRY_BUILD_OPENCL=0
+  CANOPY_FOUNDRY_BUILD_CPU=1
+)
+target_link_libraries(foundry_execution_plan_test PRIVATE nlohmann_json::nlohmann_json)
+add_test(NAME foundry_execution_plan COMMAND foundry_execution_plan_test)
 
 if(NOT IDA_NATIVE_CUDA_FOUND AND NOT IDA_NATIVE_ENABLE_AMD)
   message(FATAL_ERROR

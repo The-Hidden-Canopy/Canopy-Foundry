@@ -29,6 +29,7 @@
 #include <cuda_runtime.h>
 #include <nlohmann/json.hpp>
 
+#include "canopy_foundry/execution/plan.hpp"
 #include "ida_native/arena.hpp"
 #include "ida_native/cli_welcome.hpp"
 #include "ida_native/checkpoint.hpp"
@@ -603,8 +604,11 @@ void execute_burn(
     const Args& args,
     const ida_native::NativeRequest& request,
     ida_native::NativeArena& arena,
-    ida_native::NativeArena* second_stage = nullptr
+    ida_native::NativeArena* second_stage,
+    const canopy_foundry::ExecutionPlan& execution_plan
 ) {
+    const std::string execution_plan_hash =
+        canopy_foundry::execution_plan_sha256(execution_plan);
     const bool model_parallel = second_stage != nullptr;
     const auto& mp_devices = request.device.model_parallel_devices;
     if (!mp_devices.empty() && !model_parallel) {
@@ -636,7 +640,18 @@ void execute_burn(
               ida_native::json_escape(request.device.peer_transport) + "\""
         : "\"cuda_device\": " + std::to_string(arena.device_id) +
               ", \"model_parallel\": false, \"peer_transport\": \"none\"";
-    ida_native::write_status(request.status_file, request, "setup");
+    ida_native::write_status(
+        request.status_file,
+        request,
+        "setup",
+        {
+            "\"execution_plan_schema\": \"" +
+                ida_native::json_escape(execution_plan.schema) + "\"",
+            "\"execution_plan_sha256\": \"" + execution_plan_hash + "\"",
+            "\"execution_plan_runtime_verification_required\": " +
+                std::string(execution_plan.runtime_verification_required ? "true" : "false")
+        }
+    );
     if (const auto attention_error = validate_attention_contract(request)) {
         ida_native::write_status(
             request.status_file,
@@ -969,11 +984,38 @@ int main(int argc, char** argv) {
             throw std::runtime_error("usage: ida_native_train --request-json <path>");
         }
 
+        const auto request = ida_native::load_request(*args.request_json);
+        // This CUDA target is the first native consumer of the planner. The
+        // inventory is intentionally build-level only; the existing runtime
+        // checks below still prove architecture, memory, and topology before
+        // the corresponding execution paths run.
+        const auto plan_resolution = canopy_foundry::resolve_execution_plan(
+            request,
+            canopy_foundry::RuntimeCapabilities::from_build(true, false, false)
+        );
+        if (!plan_resolution.plan.accepted) {
+            const std::string error =
+                "execution plan rejected: " + plan_resolution.plan.rejection;
+            try {
+                ida_native::write_status(
+                    request.status_file,
+                    request,
+                    "blocked_execution_plan",
+                    {
+                        "\"error\": \"" + ida_native::json_escape(error) + "\"",
+                        "\"execution_plan_sha256\": \"" +
+                            canopy_foundry::execution_plan_sha256(plan_resolution.plan) + "\"",
+                        "\"promotion_eligible\": false"
+                    }
+                );
+            } catch (...) {}
+            throw std::runtime_error(error);
+        }
+
         if (args.kernel_telemetry) {
             configure_kernel_telemetry(*args.kernel_telemetry);
         }
 
-        const auto request = ida_native::load_request(*args.request_json);
         const bool model_parallel = !request.device.model_parallel_devices.empty();
         const int first_device = model_parallel
             ? request.device.model_parallel_devices.at(0) : args.device_id;
@@ -993,7 +1035,13 @@ int main(int argc, char** argv) {
             (void)ida_native::runtime_device_info(second_device);
         }
         try {
-            execute_burn(args, request, arena, second_stage ? &*second_stage : nullptr);
+            execute_burn(
+                args,
+                request,
+                arena,
+                second_stage ? &*second_stage : nullptr,
+                plan_resolution.plan
+            );
         } catch (const std::exception& exc) {
             // One-shot mode has no worker loop to report through: without a
             // terminal failure phase in the status file, the Python client
