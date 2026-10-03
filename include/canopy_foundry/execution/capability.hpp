@@ -17,10 +17,21 @@ enum class CapabilityState {
     RuntimeUnverified,
 };
 
+// Evidence is an assertion boundary, not a performance grade.  A build or
+// source declaration must never be serialized as hardware or burn evidence.
+enum class EvidenceTier {
+    SourceOnly,
+    UnitVerified,
+    HardwareObserved,
+    BurnObserved,
+    PromotionEligible,
+};
+
 struct CapabilityStatus {
     std::string id;
     CapabilityState state{CapabilityState::Unavailable};
     std::string evidence;
+    EvidenceTier evidence_tier{EvidenceTier::SourceOnly};
 };
 
 struct RuntimeCapabilities {
@@ -38,5 +49,6 @@ struct RuntimeCapabilities {
 };
 
 std::string capability_state_name(CapabilityState state);
+std::string evidence_tier_name(EvidenceTier tier);
 
 }  // namespace canopy_foundry

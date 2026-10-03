@@ -48,6 +48,7 @@ class ModelPortabilitySurfaceTests(unittest.TestCase):
         paths = [
             ROOT / "CMakeLists.txt",
             ROOT / "api" / "native_api.py",
+            ROOT / "foundry" / "admission" / "request_admission.py",
             ROOT / "scripts" / "neural_forge_worker.py",
             *sorted((ROOT / "src").glob("*")),
             *sorted((ROOT / "include").glob("ida_native/*")),

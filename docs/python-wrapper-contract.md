@@ -77,7 +77,9 @@ stale metrics, fabricated checkpoint status, or a fallback dataset.
 
 ## Compatibility
 
-The request and checkpoint payloads retain the v3 native field and tensor
-contracts. The executable name is `ida_native_train`; wrappers should
-resolve it through configuration rather than hard-coding a workspace-relative
-path.
+The request and checkpoint payloads use the public Foundry-local contract.
+Deployment-specific execution schemas, private descriptors, and tensor
+contracts belong to the operator-configured private adapter and must not be
+sent by a public wrapper. The executable name is `ida_native_train`; wrappers
+should resolve it through configuration rather than hard-coding a
+workspace-relative path.

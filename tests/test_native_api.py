@@ -6,6 +6,7 @@ import unittest
 
 
 from api.native_api import ApiConfig, NativeApiService, RequestFailure
+from foundry.admission.request_admission import RequestAdmissionService
 
 
 class NativeApiBoundaryTests(unittest.TestCase):
@@ -49,6 +50,7 @@ class NativeApiBoundaryTests(unittest.TestCase):
         }
 
     def test_in_process_validation_works(self) -> None:
+        self.assertIs(NativeApiService, RequestAdmissionService)
         self.assertEqual(self.service.validate(self.valid_body()), {"valid": True})
         self.assertFalse(self.run_root.exists())
 

@@ -16,7 +16,7 @@ hardware evidence explicit.
 | `src/trainer.cu` | 702,656 bytes | Model state, precision, forward/backward, MoE, optimizer, memory, pipeline, checkpoint, telemetry, and loop orchestration remain co-located. |
 | `include/ida_native/trainer.hpp` | 22,002 bytes | Trainer-facing types remain under the legacy `ida_native` namespace. |
 | `scripts/neural_forge_worker.py` | 117,716 bytes | Worker still contains substantial manifest translation and execution-policy compatibility logic. |
-| `api/native_api.py` | 8,868 bytes | In-process admission validator; no HTTP listener was observed. |
+| `api/native_api.py` | 8,868 bytes at baseline | In-process admission validator; the current port moves implementation to `foundry/admission/request_admission.py` and retains this path as a compatibility import. |
 
 The first implementation batch does not rename or delete these surfaces. It
 adds an independent planner contract and gates the CUDA entry point on plan
@@ -36,8 +36,8 @@ parity-tested.
 The planner foundation was compiled through a CPU-only CMake configuration.
 The temporary CMake dependency fetch used the repository's existing pinned
 `nlohmann_json` SHA-256 after this host's CA trust store prevented normal
-certificate verification. The dependency was kept in the ignored build
-directory and was removed after validation.
+certificate verification. The dependency remains in the ignored build
+directory and was not added to the repository.
 
 Native planner validation:
 

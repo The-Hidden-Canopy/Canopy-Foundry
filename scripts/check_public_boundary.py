@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 _FORBIDDEN_PATH = (
-    re.compile(r"(^|/)(?:build|bin|runs|data|datasets|artifacts|worker-state|secrets|\.private-evidence)(?:/|$)"),
+    re.compile(r"(^|/)(?:build|bin|runs|data|datasets|artifacts|worker-state|secrets|private-runtime|\.private-runtime|\.private-evidence)(?:/|$)"),
     re.compile(r"(^|/)configs/(?:local|private)(?:/|$)"),
     re.compile(r"(^|/)(?:\.git|\.pytest_cache|__pycache__)(?:/|$)"),
     re.compile(
@@ -41,7 +41,7 @@ _FORBIDDEN_CONTENT = (
     (re.compile(r"(?:E:|C:)\\(?:HiddenCanopy|Users)\\"), "machine-specific Windows path"),
     (re.compile(r"/(?:home/ubuntu|workspace)/"), "machine-specific Unix path"),
     (
-        re.compile(r"\bIDA(?:[-_ ]+TRAIN)?[-_ ]+V2(?:[-_. ]|$)", re.IGNORECASE),
+        re.compile(r"\bIDA(?:[-_ ]+TRAIN)?[-_ ]+V2(?:[-_. `]|$)", re.IGNORECASE),
         "legacy private native identifier",
     ),
     (
@@ -60,6 +60,19 @@ _FORBIDDEN_CONTENT = (
         ),
         "private low-precision encoding implementation",
     ),
+)
+# History mode is intentionally narrower than the working-tree scan.  It is
+# meant to catch credentials, machine paths, and concrete instruction/source
+# leaks that can survive after a file is deleted, without treating an old
+# compatibility identifier as a secret by itself.
+_HISTORY_CONTENT = (
+    _FORBIDDEN_CONTENT[0],
+    _FORBIDDEN_CONTENT[1],
+    _FORBIDDEN_CONTENT[2],
+    _FORBIDDEN_CONTENT[3],
+    _FORBIDDEN_CONTENT[4],
+    _FORBIDDEN_CONTENT[8],
+    _FORBIDDEN_CONTENT[9],
 )
 _PRIVATE_OVERLAY_PATHS = {
     "include/ida_native/ontology.hpp",
@@ -135,6 +148,66 @@ def _git_history_paths(root: Path) -> list[str]:
         if separator and path:
             paths.append(path.replace("\\", "/"))
     return paths
+
+
+def _git_history_blobs(root: Path) -> list[tuple[str, str, bytes]]:
+    """Return reachable text candidates as (object, path, bytes).
+
+    The size/type preflight keeps history mode bounded and avoids loading
+    binary or very large artifacts merely to inspect a public checkout.
+    """
+    result = subprocess.run(
+        [
+            "git",
+            "-c",
+            "safe.directory=*",
+            "-C",
+            str(root),
+            "rev-list",
+            "--objects",
+            "--all",
+        ],
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        return []
+    objects: dict[str, str] = {}
+    for line in result.stdout.decode("utf-8", errors="replace").splitlines():
+        object_id, separator, path = line.partition(" ")
+        if separator and re.fullmatch(r"[0-9a-f]{40,64}", object_id):
+            objects.setdefault(object_id, path.replace("\\", "/"))
+    if not objects:
+        return []
+
+    batch = subprocess.run(
+        ["git", "-c", "safe.directory=*", "-C", str(root), "cat-file", "--batch-check"],
+        input=("\n".join(objects) + "\n").encode("ascii"),
+        check=False,
+        capture_output=True,
+    )
+    if batch.returncode != 0:
+        return []
+    candidates: list[tuple[str, str, bytes]] = []
+    for line in batch.stdout.decode("ascii", errors="replace").splitlines():
+        parts = line.split()
+        if len(parts) != 3 or parts[1] != "blob":
+            continue
+        try:
+            size = int(parts[2])
+        except ValueError:
+            continue
+        if size > 8 * 1024 * 1024:
+            continue
+        object_id = parts[0]
+        blob = subprocess.run(
+            ["git", "-c", "safe.directory=*", "-C", str(root), "cat-file", "blob", object_id],
+            check=False,
+            capture_output=True,
+        )
+        if blob.returncode == 0:
+            candidates.append((object_id, objects.get(object_id, "<unknown>"), blob.stdout))
+    return candidates
 
 
 def _decode_text(data: bytes) -> str | None:
@@ -253,6 +326,15 @@ def check_boundary(root: Path = ROOT, *, include_history: bool = False) -> list[
         for relative in sorted(set(_git_history_paths(root))):
             if any(pattern.search(relative) for pattern in _FORBIDDEN_PATH):
                 findings.append(f"private/generated path is reachable in Git history: {relative}")
+        for object_id, relative, data in _git_history_blobs(root):
+            text = _decode_text(data)
+            if text is not None:
+                location = f"{relative} (Git history blob {object_id[:12]})"
+                findings.extend(
+                    f"{label} in {location}"
+                    for pattern, label in _HISTORY_CONTENT
+                    if pattern.search(text)
+                )
 
     catalog_path = root / "configs" / "public" / "capabilities.json"
     try:

@@ -46,8 +46,21 @@ int main() {
                  "baseline plan did not retain runtime verification")) return 1;
     if (!require(plan.precision.master_storage == "bf16",
                  "baseline master storage was not resolved")) return 1;
+    if (!require(plan.precision.master_format == NumericFormat::BF16 &&
+                     plan.precision.forward_format == NumericFormat::BF16 &&
+                     plan.precision.backward_dx_format == NumericFormat::BF16,
+                 "baseline explicit precision roles were not resolved")) return 1;
     if (!require(plan.device.parallel_mode == "single_device",
                  "baseline device plan changed parallel mode")) return 1;
+    if (!require(plan.parallel.mode == ParallelMode::SingleDevice &&
+                     plan.parallel.transport == TransportKind::None,
+                 "baseline parallel plan was not explicit")) return 1;
+    if (!require(plan.memory.estimate_valid &&
+                     !plan.memory.runtime_capacity_verified,
+                 "baseline memory plan did not preserve estimate/evidence boundary")) return 1;
+    if (!require(plan.checkpoint.purpose == CheckpointPurpose::ModelExport &&
+                     plan.checkpoint.atomic_publication,
+                 "baseline checkpoint publication contract was not resolved")) return 1;
 
     auto fp8 = baseline_request();
     fp8.precision_profile = "legacy_fp8";
@@ -65,6 +78,18 @@ int main() {
                  "existing Ampere packed request was rejected")) return 1;
     if (!require(ampere_plan.runtime_verification_required,
                  "Ampere plan did not retain runtime verification")) return 1;
+    if (!require(ampere_plan.precision.master_format == NumericFormat::BF16 &&
+                     ampere_plan.precision.forward_format == NumericFormat::BF16 &&
+                     ampere_plan.precision.packed_view_format == NumericFormat::FP8E4M3,
+                 "Ampere packed precision roles were not separated")) return 1;
+
+    auto moe = baseline_request();
+    moe.model.generic_moe_num_experts = 4;
+    moe.model.generic_moe_top_k = 2;
+    const auto moe_plan = resolve_execution_plan(moe, capabilities).plan;
+    if (!require(moe_plan.moe.route_ownership == "forward_owned" &&
+                     moe_plan.moe.route_generation_required,
+                 "MoE plan did not require forward-owned route generation")) return 1;
 
     auto pipeline = baseline_request();
     pipeline.device.model_parallel_devices = {0, 1};
@@ -75,6 +100,18 @@ int main() {
     if (!require(pipeline_plan.device.parallel_mode == "layer_pipeline" &&
                      pipeline_plan.device.transport == "host_staged",
                  "pipeline transport was not preserved")) return 1;
+    if (!require(pipeline_plan.parallel.mode == ParallelMode::LayerPipeline &&
+                     pipeline_plan.parallel.transport == TransportKind::HostStaged &&
+                     pipeline_plan.parallel.topology_probe_required,
+                 "pipeline parallel plan did not retain topology boundary")) return 1;
+
+    auto resume = baseline_request();
+    resume.parent.resume_from_checkpoint = "opaque-local-checkpoint";
+    const auto resume_plan = resolve_execution_plan(resume, capabilities).plan;
+    if (!require(resume_plan.checkpoint.purpose == CheckpointPurpose::ExactResume &&
+                     resume_plan.checkpoint.exact_resume_requested &&
+                     !resume_plan.checkpoint.exact_resume_supported,
+                 "exact-resume request was presented as already proven")) return 1;
 
     auto empty_attention = baseline_request();
     empty_attention.attention_backend.clear();

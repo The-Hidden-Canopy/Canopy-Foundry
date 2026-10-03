@@ -46,7 +46,7 @@ governed wrapper
     |
     | policy, identity, org scope, approval, audit, state transition
     v
-api.native_api.NativeApiService.validate()
+foundry.admission.request_admission.RequestAdmissionService.validate()
     |
     | native request only; no authority fields; paths checked under roots
     v
@@ -183,9 +183,9 @@ In-process validation is the supported Python usage:
 import os
 from pathlib import Path
 
-from api.native_api import ApiConfig, NativeApiService
+from foundry.admission.request_admission import ApiConfig, RequestAdmissionService
 
-service = NativeApiService(
+service = RequestAdmissionService(
     ApiConfig(
         dataset_root=Path(os.environ["NEURAL_FORGE_ROOT"]) / "datasets",
         artifact_root=Path(os.environ["NEURAL_FORGE_ROOT"]) / "artifacts",
@@ -334,12 +334,12 @@ external training profile to a distinct local profile through the deployment
 map, resolves dataset/model/checkpoint IDs through the local binding, verifies
 the binding's catalog version and SHA-256 catalog pin, creates a local run
 directory, creates an ignored native request manifest, verifies the mapped
-v3 backend/binary/trainer attestation, and invokes the selected target. The
+backend/binary/trainer attestation, and invokes the selected target. The
 resource-class entry in the deployment map selects the local device; the
 manifest cannot select a GPU. Optimizer, precision, backend, paths, and
-training settings come only from the local profile/configuration. V3 OpenCL
-worker runs additionally resolve a private `kernel_ref` under `--kernel-root`
-and verify it against the catalog's pinned SHA-256 digest. Legacy direct
+training settings come only from the local profile/configuration. Private
+adapter runs additionally resolve deployment-owned packages under the ignored
+private-runtime root and verify their pinned SHA-256 digest. Legacy direct
     worker runs additionally require the Hub-issued timestamp, claim window,
     authority, and lineage envelopes. Those envelopes are checked for opaque IDs and recursively
 reject local paths, commands, credentials, and private diagnostics before any
@@ -452,39 +452,25 @@ external profile ID, dataset/model/checkpoint IDs, resource class, and
 justification. The worker resolves all remaining settings from its local
 catalog and binding.
 
-The V3 integration is an explicit private exception to the public settings
-catalog, never an implicit translation. A deployment-owned entry may include
-an exact `native_execution` object with schema
-`ida-native-execution-request.v1`, the canonical V3 profile ID, backend,
-precision profile, optimizer, and attention backend. The local binding and
-config must match those values exactly, and its `execution` entry must pin
-`binary_sha256`. The worker then requires the Hub attestation, map pin, local
-binding, and measured binary hash to agree. A V3 profile that would otherwise
-require AdamW or WGMMA is rejected unless this private contract is present and
-matched. It is never downgraded to the public Lion/scalar route.
+Private execution is an explicit deployment-owned exception to the public
+settings catalog, never an implicit translation. A local binding may select a
+private adapter through the ignored private-runtime directory, but the public
+worker sees only opaque profile/artifact aliases, integrity digests, and a
+bounded adapter result. The adapter owns its exact profile, binary, recipe,
+source, hardware, and native-setting details. A missing adapter, mismatched
+digest, unsupported setting, or incomplete attestation fails closed.
 
-Deployment-owned private native profiles use the same canonical Hub envelope
-but a distinct, versioned private projection schema:
-`neural-forge-private-native-execution-request.v1`. The projection is
-structurally validated in this public worker, while its exact profile,
-artifact, binary, recipe, source, hardware, and native-setting values are
-provided only by the deployment-owned map. Private entries must be marked
-`visibility: "private"`, use opaque aliases, pin the measured binary digest,
-and carry a complete path-free recipe/source attestation. The corresponding
-`private_profiles` binding supplies the local config, optional kernel, and a
-SHA-256-pinned native source-manifest file. The worker verifies those pins
-before adding local paths to the native request. The projection never
-contains Hub authority, organization, worker identity, justification,
-credentials, lifecycle, audit, evaluation evidence, or promotion fields.
+The public worker must not publish private schemas, kernel names, recipes,
+source manifests, hardware tuning, credentials, local paths, or raw telemetry.
+The Hub envelope carries authority and lifecycle metadata; the local adapter
+returns a Foundry request that is admitted by Foundry's own planner. Public
+catalog entries are never silently translated into a private execution mode,
+and a private mode is never silently downgraded to a public fallback.
 
-The local receipt store validates detailed native evidence against the
-already-approved private projection and writes it only to the ignored,
-deployment-owned evidence directory. The Hub receipt reference carries no
-native descriptor or evidence object. Unsupported optimizer, attention,
-backend, architecture, or training-mode substitutions fail closed; public
-catalog entries and public execution routes are not translated or expanded.
-A local unit test or synthetic device record is not native hardware or
-promotion evidence.
+The local receipt store validates detailed execution evidence against the
+approved local adapter and writes it only to the ignored deployment-owned
+evidence directory. The Hub receives a bounded receipt reference. A unit test
+or synthetic device record is not hardware, burn, or promotion evidence.
 
 The ignored deployment map contains opaque IDs and execution allowlists only;
 it must not contain paths, commands, model bytes, credentials, or training
@@ -518,41 +504,10 @@ invalid device, or missing local binding fails closed. Public model
 availability does not authorize the worker to send model bytes or filesystem
 paths to the Hub.
 
-For a V3 private entry, the additional map section is shaped like this (the
-binary digest must be replaced by the deployment's measured digest; the
-placeholder is intentionally not executable):
-
-```json
-{
-  "execution": {
-    "backend": "cuda",
-    "artifact_id": "<opaque-artifact-alias>",
-    "binary_names": ["<approved-binary-alias>"],
-    "binary_sha256": "<sha256 of the approved V3 binary>"
-  },
-  "native_execution": {
-    "schema_version": "ida-native-execution-request.v1",
-    "profile_id": "<hub-profile-alias>",
-    "backend": "cuda",
-    "precision_profile": "<opaque-precision-alias>",
-    "optimizer_type": "<opaque-optimizer-alias>",
-    "attention_backend": "<opaque-attention-alias>"
-  }
-}
-```
-
-The worker records the validated native descriptor in the private run
-directory and separately writes the low-level request consumed by the native
-binary. The low-level V3 request intentionally omits Foundry supervisor paths
-such as `repo_root`, `status_file`, `job_id`, and
-`expected_terminal_phase`; the V3 parser rejects or does not consume those
-fields.
-V3 emits its completion receipt as `metrics.json`. For CUDA, Foundry accepts
-that receipt only when it names the worker-owned output directory and a
-present `model.safetensors`; CPU and OpenCL smoke receipts retain their
-explicit no-checkpoint result. Neither the descriptor nor the low-level
-request is returned to the Hub; worker updates contain only the bounded
-public progress envelope.
+The adapter records any detailed descriptor in the ignored private run
+directory and separately invokes the local Foundry request boundary. The
+descriptor and low-level request never return to the Hub; worker updates carry
+only the bounded public progress envelope and an opaque receipt reference.
 
 ### Use your own config, dataset, model, or checkpoint
 

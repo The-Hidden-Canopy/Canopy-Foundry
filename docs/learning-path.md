@@ -61,7 +61,7 @@ observed as successful.
 untrusted request body
         |
         v
-in-process admission and path/schema validation  (api/native_api.py)
+in-process admission and path/schema validation  (foundry/admission/request_admission.py)
         |
         v
 governed wrapper supplies org/role/justification,
@@ -86,7 +86,7 @@ a request and the native process's observed result are separate facts.
 
 | If you want to understand... | Start with... | Then compare... |
 | --- | --- | --- |
-| Request shape and rejection rules | `api/native_api.py` | `tests/test_native_api.py` and `include/ida_native/request.hpp` |
+| Request shape and rejection rules | `foundry/admission/request_admission.py` | `tests/test_native_api.py` and `include/ida_native/request.hpp` |
 | Worker-to-native handoff | `scripts/neural_forge_worker.py` | `scripts/local_binding.py`, `scripts/local_receipt.py`, and `tests/test_neural_forge_worker.py` |
 | Native JSON parsing | `src/request.cpp` | `src/main.cpp` and `include/ida_native/request.hpp` |
 | Model and artifact compatibility | `scripts/model_contracts.py` | `scripts/compatibility.py` and `tests/test_model_portability.py` |
@@ -180,7 +180,7 @@ controls.
 | --- | --- | --- |
 | CMake cannot configure | [Starter guide](../STARTER_GUIDE.md) and `CMakePresets.json` | A successful configure is not a training result. |
 | No CUDA device is available | `PORTABILITY.md` and the CPU/OpenCL examples | Smoke builds are experimental and not production-equivalent. |
-| A request rejects a path | `api/native_api.py` and `tests/test_native_api.py` | Use bounded local references; do not relax path checks to make a fixture pass. |
+| A request rejects a path | `foundry/admission/request_admission.py` and `tests/test_native_api.py` | Use bounded local references; do not relax path checks to make a fixture pass. |
 | An HTTP endpoint is missing | [Request-admission README](../api/README.md) | `api/` is not a server and must not become an authority bypass. |
 | A private runtime or binding is absent | [Private runtime boundary](private-runtime-boundary.md) | Deployment-owned material is intentionally unavailable in the public repo. |
 | A receipt is unavailable or mismatched | `scripts/local_receipt.py` and `tests/test_private_boundaries.py` | Treat missing or stale evidence as unavailable, not as success. |

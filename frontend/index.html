@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en" data-view="overview">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Canopy Foundry local execution console: inspect requests, capability contracts, and bounded evidence without a network service."
+    />
+    <title>Canopy Foundry · Local execution console</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div>
+            <div class="brand-name">CANOPY FOUNDRY</div>
+            <div class="brand-subtitle">LOCAL EXECUTION CONSOLE</div>
+          </div>
+        </div>
+        <div class="topbar-status">
+          <span class="status-dot is-teal" aria-hidden="true"></span>
+          <span id="runtime-status">LOCAL ONLY</span>
+          <span class="topbar-divider" aria-hidden="true"></span>
+          <time id="clock" datetime="">--:--</time>
+        </div>
+      </header>
+
+      <nav class="left-rail" aria-label="Foundry console navigation">
+        <div class="rail-label">WORKSPACE</div>
+        <button class="nav-item is-active" type="button" data-view="overview">
+          <span class="nav-glyph" aria-hidden="true">⌂</span>
+          <span>Overview</span>
+          <span class="nav-index">01</span>
+        </button>
+        <button class="nav-item" type="button" data-view="plan">
+          <span class="nav-glyph" aria-hidden="true">◇</span>
+          <span>Plan lens</span>
+          <span class="nav-index">02</span>
+        </button>
+        <button class="nav-item" type="button" data-view="capabilities">
+          <span class="nav-glyph" aria-hidden="true">⊙</span>
+          <span>Capabilities</span>
+          <span class="nav-index">03</span>
+        </button>
+        <button class="nav-item" type="button" data-view="evidence">
+          <span class="nav-glyph" aria-hidden="true">◌</span>
+          <span>Evidence</span>
+          <span class="nav-index">04</span>
+        </button>
+
+        <div class="rail-label rail-label-spaced">BOUNDARY</div>
+        <button class="nav-item" type="button" data-view="boundaries">
+          <span class="nav-glyph" aria-hidden="true">⌁</span>
+          <span>Ownership</span>
+          <span class="nav-index">05</span>
+        </button>
+
+        <div class="rail-bottom">
+          <div class="rail-bottom-title">STANDALONE SURFACE</div>
+          <p>Built to inspect local contracts. No Hub session is required.</p>
+          <div class="rail-version"><span class="status-dot is-amber" aria-hidden="true"></span> planner foundation / v1</div>
+        </div>
+      </nav>
+
+      <main class="main-content">
+        <div class="main-heading">
+          <div>
+            <div class="eyebrow">CANOPY FOUNDRY / <span id="current-view-label">OVERVIEW</span></div>
+            <div class="heading-rule" aria-hidden="true"></div>
+          </div>
+          <div class="heading-meta">NO REMOTE CONNECTION</div>
+        </div>
+
+        <section class="view-panel is-active" data-view-panel="overview" aria-labelledby="overview-title">
+          <div class="hero-block">
+            <div class="hero-copy">
+              <div class="eyebrow eyebrow-teal">LOCAL EXECUTION / INSPECTABLE BY DEFAULT</div>
+              <h1 id="overview-title">Make the execution contract visible.</h1>
+              <p class="hero-lede">
+                Foundry turns a native request into an explicit plan. This surface lets you read that contract,
+                inspect its evidence posture, and keep the boundary between capability and authority clear.
+              </p>
+              <div class="hero-actions">
+                <button class="button button-primary" type="button" data-action="load-file">
+                  <span aria-hidden="true">＋</span> Load local JSON
+                </button>
+                <button class="button button-quiet" type="button" data-action="example">
+                  View example contract <span aria-hidden="true">↗</span>
+                </button>
+                <input id="request-file" type="file" accept=".json,application/json" hidden />
+              </div>
+              <p class="microcopy" id="source-note">Nothing has been loaded. The example remains clearly marked as non-runtime data.</p>
+            </div>
+            <div class="hero-orbit" aria-hidden="true">
+              <div class="orbit orbit-outer"></div>
+              <div class="orbit orbit-mid"></div>
+              <div class="orbit orbit-inner"></div>
+              <div class="orbit-core"><span></span></div>
+              <div class="orbit-label orbit-label-top">PLAN</div>
+              <div class="orbit-label orbit-label-right">MEMORY</div>
+              <div class="orbit-label orbit-label-bottom">RECEIPT</div>
+              <div class="orbit-label orbit-label-left">BOUNDARY</div>
+            </div>
+          </div>
+
+          <div class="overview-grid">
+            <article class="panel panel-teal panel-large">
+              <div class="panel-kicker"><span class="status-dot is-teal" aria-hidden="true"></span> CURRENT LENS</div>
+              <div class="panel-title-row">
+                <h2>Request → plan</h2>
+                <span class="tag tag-teal" id="overview-source-tag">EMPTY</span>
+              </div>
+              <p class="panel-copy">
+                A raw request is input. The native planner is the authority for resolution. This UI displays
+                local documents and contract examples; it does not resolve hardware or claim execution.
+              </p>
+              <div class="metric-row">
+                <div class="metric">
+                  <span class="metric-label">SOURCE</span>
+                  <strong id="overview-source">No file</strong>
+                </div>
+                <div class="metric">
+                  <span class="metric-label">DOCUMENT</span>
+                  <strong id="overview-document">—</strong>
+                </div>
+                <div class="metric">
+                  <span class="metric-label">NETWORK</span>
+                  <strong>Disabled</strong>
+                </div>
+              </div>
+            </article>
+
+            <article class="panel panel-amber">
+              <div class="panel-kicker"><span class="status-dot is-amber" aria-hidden="true"></span> PLANNER STATE</div>
+              <div class="state-number">01</div>
+              <h2>Contract surface</h2>
+              <p class="panel-copy">Capabilities, precision roles, routing ownership, and evidence stages have a named place.</p>
+              <button class="inline-link" type="button" data-view-jump="capabilities">Inspect capability inventory <span aria-hidden="true">→</span></button>
+            </article>
+
+            <article class="panel panel-muted">
+              <div class="panel-kicker"><span class="status-dot is-muted" aria-hidden="true"></span> RUNTIME LINK</div>
+              <div class="panel-title-row">
+                <h2>Not attached</h2>
+                <span class="tag tag-muted">SAFE</span>
+              </div>
+              <p class="panel-copy">No socket, service, worker, or cloud session is assumed by this frontend.</p>
+              <div class="empty-line"><span></span><span></span><span></span><span></span></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view-panel" data-view-panel="plan" aria-labelledby="plan-title" hidden>
+          <div class="view-title-row">
+            <div>
+              <div class="eyebrow eyebrow-teal">CONTRACT / REQUEST + RESOLUTION</div>
+              <h1 id="plan-title">Plan lens</h1>
+            </div>
+            <span class="tag tag-muted" id="plan-state-tag">NO DOCUMENT</span>
+          </div>
+          <div class="notice notice-amber">
+            <span class="notice-icon" aria-hidden="true">!</span>
+            <span><strong>Evidence boundary.</strong> A displayed contract is not proof that a device, kernel, or optimizer actually ran.</span>
+          </div>
+          <div class="plan-layout">
+            <article class="panel">
+              <div class="panel-heading">
+                <div>
+                  <div class="panel-kicker">INPUT DOCUMENT</div>
+                  <h2 id="plan-document-name">No local JSON loaded</h2>
+                </div>
+                <button class="small-button" type="button" data-action="load-file">LOAD</button>
+              </div>
+              <div class="fact-list" id="request-facts"></div>
+              <details class="json-details">
+                <summary>View bounded source JSON</summary>
+                <pre id="request-json">{}</pre>
+              </details>
+            </article>
+
+            <article class="panel panel-teal">
+              <div class="panel-heading">
+                <div>
+                  <div class="panel-kicker">RESOLVED SHAPE</div>
+                  <h2>ExecutionPlan</h2>
+                </div>
+                <span class="tag tag-teal">NATIVE OWNER</span>
+              </div>
+              <div class="fact-list" id="plan-facts"></div>
+              <div class="planner-callout">
+                <div class="callout-title"><span class="status-dot is-amber" aria-hidden="true"></span> Use the native planner</div>
+                <p>Run <code>foundry plan REQUEST.json</code> to obtain a runtime resolution. This panel never substitutes for that result.</p>
+              </div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-heading">
+                <div>
+                  <div class="panel-kicker">PRECISION ROLES</div>
+                  <h2>Representation map</h2>
+                </div>
+                <span class="tag tag-muted">EXPLICIT</span>
+              </div>
+              <div class="fact-list" id="precision-facts"></div>
+              <div class="thin-rule"></div>
+              <p class="microcopy">Master storage, execution views, gradients, accumulators, and optimizer state remain distinct contracts.</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="view-panel" data-view-panel="capabilities" aria-labelledby="capabilities-title" hidden>
+          <div class="view-title-row">
+            <div>
+              <div class="eyebrow eyebrow-teal">INVENTORY / PUBLIC CONTRACT</div>
+              <h1 id="capabilities-title">Capabilities</h1>
+            </div>
+            <span class="tag tag-amber">CATALOG ≠ RUNTIME</span>
+          </div>
+          <p class="section-lede">The inventory explains what a build or contract knows how to discuss. It does not imply that the current machine has verified or exercised it.</p>
+          <div class="capability-table panel">
+            <div class="table-head">
+              <span>CAPABILITY</span><span>STATE</span><span>EVIDENCE</span><span>BOUNDARY NOTE</span>
+            </div>
+            <div id="capability-rows"></div>
+          </div>
+        </section>
+
+        <section class="view-panel" data-view-panel="evidence" aria-labelledby="evidence-title" hidden>
+          <div class="view-title-row">
+            <div>
+              <div class="eyebrow eyebrow-teal">PROVENANCE / NO FLATTENING</div>
+              <h1 id="evidence-title">Evidence stages</h1>
+            </div>
+            <span class="tag tag-muted">BOUNDED RECEIPT MODEL</span>
+          </div>
+          <p class="section-lede">Requested, resolved, accepted, observed, and persisted are separate claims. A later stage cannot be inferred from an earlier one.</p>
+          <div class="evidence-track" id="evidence-track"></div>
+          <div class="evidence-grid">
+            <article class="panel panel-amber">
+              <div class="panel-kicker"><span class="status-dot is-amber" aria-hidden="true"></span> CURRENT POSTURE</div>
+              <h2 id="evidence-posture-title">Contract-only</h2>
+              <p id="evidence-posture-copy">No runtime receipt is attached. The console is safe to explore, but it is not reporting an execution.</p>
+              <div class="posture-meter"><span></span></div>
+              <div class="meter-labels"><span>CLAIM DEPTH</span><span>0 / 5</span></div>
+            </article>
+            <article class="panel">
+              <div class="panel-kicker"><span class="status-dot is-teal" aria-hidden="true"></span> RECEIPT FIELDS</div>
+              <div class="fact-list" id="receipt-facts"></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view-panel" data-view-panel="boundaries" aria-labelledby="boundaries-title" hidden>
+          <div class="view-title-row">
+            <div>
+              <div class="eyebrow eyebrow-teal">OWNERSHIP / CONTROL PLANE SEPARATION</div>
+              <h1 id="boundaries-title">What belongs where</h1>
+            </div>
+            <span class="tag tag-teal">STANDALONE FIRST</span>
+          </div>
+          <p class="section-lede">Foundry is the local execution product. Authority, identity, organization scope, lifecycle, evaluation, and promotion remain outside it.</p>
+          <div class="boundary-grid">
+            <article class="panel panel-teal">
+              <div class="boundary-mark">FOUNDRY</div>
+              <h2>Foundry owns</h2>
+              <ul class="boundary-list">
+                <li>Request admission and plan resolution</li>
+                <li>Memory, precision, kernels, routing, and optimizer execution</li>
+                <li>Checkpoint integrity and local execution receipts</li>
+                <li>Deterministic rejection of unsupported plans</li>
+              </ul>
+            </article>
+            <article class="panel panel-red">
+              <div class="boundary-mark">EXTERNAL</div>
+              <h2>The Hub owns</h2>
+              <ul class="boundary-list">
+                <li>Identity, organization scope, roles, and authentication</li>
+                <li>Job lifecycle, quotas, cancellation, and worker claims</li>
+                <li>Evaluation, audit, promotion, and public projections</li>
+                <li>Remote API authority and policy selection</li>
+              </ul>
+            </article>
+            <article class="panel panel-muted boundary-wide">
+              <div class="panel-kicker"><span class="status-dot is-muted" aria-hidden="true"></span> THIS FRONTEND</div>
+              <h2>Read-only local lens</h2>
+              <p class="panel-copy">It reads a JSON file selected by the operator, keeps it in browser memory, and renders bounded inspection views. It does not upload, launch, authorize, or promote anything.</p>
+              <div class="boundary-flow">
+                <span>JSON file</span><i aria-hidden="true">→</i><strong>local lens</strong><i aria-hidden="true">→</i><span>human review</span>
+              </div>
+            </article>
+          </div>
+        </section>
+      </main>
+
+      <aside class="right-rail" aria-label="Evidence and local boundary">
+        <div class="rail-label">SIGNAL</div>
+        <section class="signal-card">
+          <div class="signal-topline"><span class="status-dot is-amber" aria-hidden="true"></span><span>POSTURE</span></div>
+          <div class="signal-title" id="rail-posture-title">CONTRACT-ONLY</div>
+          <p id="rail-posture-copy">No runtime evidence attached.</p>
+          <div class="signal-bar"><span></span></div>
+        </section>
+
+        <section class="rail-section">
+          <div class="rail-section-title">ACTIVE DOCUMENT</div>
+          <div class="rail-document">
+            <span class="document-icon" aria-hidden="true">◇</span>
+            <div>
+              <strong id="rail-document-name">None loaded</strong>
+              <span id="rail-document-type">Waiting for local JSON</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="rail-section">
+          <div class="rail-section-title">LOCAL GUARANTEES</div>
+          <div class="guarantee-list">
+            <div><span class="check-mark">✓</span><span>No network calls</span></div>
+            <div><span class="check-mark">✓</span><span>No runtime claims</span></div>
+            <div><span class="check-mark">✓</span><span>No authority expansion</span></div>
+            <div><span class="check-mark">✓</span><span>Source stays in memory</span></div>
+          </div>
+        </section>
+
+        <section class="rail-section rail-note">
+          <div class="rail-section-title">READ THE SIGNAL</div>
+          <p>Teal marks a named contract. Amber marks an unverified or experimental edge. Red marks an ownership boundary, not an incident.</p>
+        </section>
+
+        <div class="right-rail-footer">
+          <div>CANOPY FOUNDRY</div>
+          <span>PUBLIC LOCAL SURFACE · 2026</span>
+        </div>
+      </aside>
+
+      <footer class="bottom-bar">
+        <span id="footer-message">Ready · select a local JSON document or inspect the example contract.</span>
+        <span class="bottom-bar-right">STANDALONE / NO SOCKET / NO CLOUD</span>
+      </footer>
+    </div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

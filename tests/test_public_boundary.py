@@ -39,6 +39,19 @@ class PublicBoundaryTests(unittest.TestCase):
             self.assertEqual(profile["supported_optimizers"], expected)
             self.assertFalse(set(profile) & {"model", "training", "input", "dataset", "checkpoint"})
 
+    def test_public_worker_has_no_legacy_private_contract_symbols(self) -> None:
+        legacy_schema = "ida-" + "native-execution-request.v1"
+        for relative in (
+            "scripts/compatibility.py",
+            "scripts/deployment_map.py",
+            "scripts/neural_forge_worker.py",
+        ):
+            text = (ROOT / relative).read_text(encoding="utf-8")
+            with self.subTest(relative=relative):
+                self.assertNotIn(legacy_schema, text)
+                self.assertNotIn("validate_v3_native_execution_request", text)
+                self.assertNotIn("project_v3_native_execution_request", text)
+
     def test_cli_welcome_explains_the_local_power_path(self) -> None:
         welcome = (ROOT / "include" / "ida_native" / "cli_welcome.hpp").read_text(encoding="utf-8")
         self.assertIn("Power path: local config -> local data/checkpoint -> native trainer.", welcome)
@@ -217,6 +230,32 @@ class PublicBoundaryTests(unittest.TestCase):
 
         self.assertTrue(any("legacy private native identifier" in item for item in findings))
 
+    def test_boundary_rejects_legacy_identifier_inside_markdown_code(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "configs" / "public").mkdir(parents=True)
+            (root / "configs" / "public" / "capabilities.json").write_text(
+                json.dumps({
+                    "profiles": {
+                        "cpu-smoke": {
+                            "backend": "cpu",
+                            "enabled": False,
+                            "supported_optimizers": [],
+                        }
+                    }
+                }),
+                encoding="utf-8",
+            )
+            private_reference = root / "migration.md"
+            private_reference.write_text(
+                "`" + "IDA" + "-TRAIN-" + "V2" + "`\n", encoding="utf-8"
+            )
+            subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
+
+            findings = check_boundary(root)
+
+        self.assertTrue(any("legacy private native identifier" in item for item in findings))
+
     def test_boundary_rejects_private_adapter_identifier(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -264,6 +303,42 @@ class PublicBoundaryTests(unittest.TestCase):
 
         self.assertTrue(any("private/generated path is publishable" in item for item in findings))
 
+    def test_boundary_rejects_tracked_private_runtime_paths(self) -> None:
+        for relative in ("private-runtime/package.bundle", ".private-runtime/package.bundle"):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / "configs" / "public").mkdir(parents=True)
+                (root / "configs" / "public" / "capabilities.json").write_text(
+                    json.dumps({
+                        "profiles": {
+                            "cpu-smoke": {
+                                "backend": "cpu",
+                                "enabled": False,
+                                "supported_optimizers": [],
+                            }
+                        }
+                    }),
+                    encoding="utf-8",
+                )
+                private_runtime = root / relative
+                private_runtime.parent.mkdir(parents=True)
+                private_runtime.write_bytes(b"deployment-only")
+                (root / ".gitignore").write_text(
+                    "/private-runtime/\n/.private-runtime/\n", encoding="utf-8"
+                )
+                subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
+                subprocess.run(
+                    ["git", "-c", "safe.directory=*", "-C", str(root), "add", "--force", "--", relative],
+                    check=True,
+                )
+
+                findings = check_boundary(root)
+
+            self.assertIn(
+                f"private/generated path is publishable: {relative}",
+                findings,
+            )
+
     def test_history_mode_rejects_reachable_private_source_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -295,6 +370,66 @@ class PublicBoundaryTests(unittest.TestCase):
             "private/generated path is reachable in Git history: kernels/attention_wgmma.cu",
             findings,
         )
+
+    def test_history_mode_rejects_deleted_private_runtime_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "configs" / "public").mkdir(parents=True)
+            (root / "configs" / "public" / "capabilities.json").write_text(
+                json.dumps({
+                    "profiles": {
+                        "cpu-smoke": {
+                            "backend": "cpu",
+                            "enabled": False,
+                            "supported_optimizers": [],
+                        }
+                    }
+                }),
+                encoding="utf-8",
+            )
+            private = root / "private-runtime" / "package.bundle"
+            private.parent.mkdir()
+            private.write_bytes(b"deployment-only")
+            subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "boundary-test"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "boundary@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "--all"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "--quiet", "-m", "fixture"], check=True)
+            private.unlink()
+            findings = check_boundary(root, include_history=True)
+
+        self.assertIn(
+            "private/generated path is reachable in Git history: private-runtime/package.bundle",
+            findings,
+        )
+
+    def test_history_mode_rejects_deleted_credential_blob(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "configs" / "public").mkdir(parents=True)
+            (root / "configs" / "public" / "capabilities.json").write_text(
+                json.dumps({
+                    "profiles": {
+                        "cpu-smoke": {
+                            "backend": "cpu",
+                            "enabled": False,
+                            "supported_optimizers": [],
+                        }
+                    }
+                }),
+                encoding="utf-8",
+            )
+            secret = root / "old.txt"
+            secret.write_text(f"hf_{'A' * 24}\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "boundary-test"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "boundary@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "--all"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "--quiet", "-m", "fixture"], check=True)
+            secret.unlink()
+            findings = check_boundary(root, include_history=True)
+
+        self.assertTrue(any("token-shaped Hugging Face credential" in item for item in findings))
 
     def test_ignored_cache_git_metadata_does_not_fail_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

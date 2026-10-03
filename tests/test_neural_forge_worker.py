@@ -32,9 +32,8 @@ from scripts.neural_forge_worker import (
 from scripts.compatibility import (
     BACKEND_POLICIES,
     MANIFEST_SCHEMA_VERSION,
-    validate_v3_native_execution_request,
 )
-from scripts.deployment_map import DEPLOYMENT_MAP_SCHEMA_VERSION, DeploymentMapError, load_deployment_map
+from scripts.deployment_map import DEPLOYMENT_MAP_SCHEMA_VERSION
 from scripts.local_binding import BindingError, file_sha256, load_local_binding, path_sha256
 
 
@@ -211,113 +210,14 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
             },
         }
 
-    def v3_native_job(self) -> dict[str, object]:
-        """Build a Hub-shaped job with an explicit private V3 deployment map."""
-
-        config_path = self.config.config_root / "examples" / "small.json"
-        config = json.loads(config_path.read_text(encoding="utf-8"))
-        config["attention_backend"] = "attention-ref-v3"
-        config_path.write_text(json.dumps(config), encoding="utf-8")
-
-        binding = json.loads(self.binding_path.read_text(encoding="utf-8"))
-        binding["profiles"]["cuda-local"].update({
-            "sha256": file_sha256(config_path),
-            "precision": "precision-ref-v3",
-            "optimizer": "optimizer-ref-v3",
-        })
-        self.binding_path.write_text(json.dumps(binding), encoding="utf-8")
-
-        binary_sha256 = file_sha256(self.binary_path)
-        self.deployment_map_path.write_text(json.dumps({
-            "schema_version": DEPLOYMENT_MAP_SCHEMA_VERSION,
-            "hub_profiles": {
-                "edge-full": {
-                    "local_profile_id": "cuda-local",
-                    "trainer_versions": ["trainer-ref-v3"],
-                    "execution": {
-                        "backend": "cuda",
-                        "artifact_id": "artifact-ref-v3",
-                        "binary_names": ["ida_native_train"],
-                        "binary_sha256": binary_sha256,
-                    },
-                    "native_execution": {
-                        "schema_version": "ida-native-execution-request.v1",
-                        "profile_id": "edge-full",
-                        "backend": "cuda",
-                        "precision_profile": "precision-ref-v3",
-                        "optimizer_type": "optimizer-ref-v3",
-                        "attention_backend": "attention-ref-v3",
-                    },
-                },
-            },
-            "resource_classes": {"gpu-standard": {"device": 0}},
-        }), encoding="utf-8")
-
-        job = self.manifest_job(profile_id="edge-full", trainer_version="trainer-ref-v3")
-        job["worker_manifest"]["execution"] = {
-            "backend": "cuda",
-            "artifact_id": "artifact-ref-v3",
-            "binary_name": "ida_native_train",
-            "binary_sha256": binary_sha256,
+    def test_legacy_private_execution_mapping_is_rejected_before_launch(self) -> None:
+        payload = json.loads(self.deployment_map_path.read_text(encoding="utf-8"))
+        payload["hub_profiles"]["cuda-local"]["native_" + "execution"] = {
+            "schema_version": "legacy-private-request.v1",
         }
-        return job
-
-    def test_v3_native_contract_reaches_foundry_request_without_public_translation(self) -> None:
-        job = self.v3_native_job()
-        local_request, _, _, resolved = manifest_local_request(job, self.config)
-        self.assertEqual(resolved["native_execution"]["schema_version"], "ida-native-execution-request.v1")
-        self.assertEqual(resolved["native_execution"]["optimizer_type"], "optimizer-ref-v3")
-        self.assertEqual(resolved["native_execution"]["attention_backend"], "attention-ref-v3")
-        command, output_path = build_command(job, self.config)
-        self.assertTrue(command)
-        descriptor = json.loads((output_path / "native-execution-request.json").read_text(encoding="utf-8"))
-        self.assertEqual(descriptor["profile_id"], "edge-full")
-        self.assertEqual(descriptor["optimizer_type"], "optimizer-ref-v3")
-        self.assertNotIn("authority", descriptor)
-        native_request = json.loads((output_path / "native-request.json").read_text(encoding="utf-8"))
-        self.assertEqual(native_request["optimizer_type"], "optimizer-ref-v3")
-        self.assertEqual(native_request["attention_backend"], "attention-ref-v3")
-        for field in ("repo_root", "status_file", "job_id", "expected_terminal_phase"):
-            self.assertNotIn(field, native_request)
-
-    def test_v3_native_contract_rejects_lion_or_scalar_translation(self) -> None:
-        job = self.v3_native_job()
-        binding = json.loads(self.binding_path.read_text(encoding="utf-8"))
-        binding["profiles"]["cuda-local"]["optimizer"] = "lion"
-        self.binding_path.write_text(json.dumps(binding), encoding="utf-8")
-        with self.assertRaisesRegex(WorkerError, "native contract"):
-            manifest_local_request(job, self.config)
-
-    def test_v3_native_descriptor_rejects_public_artifact_identity(self) -> None:
-        job = self.v3_native_job()
-        deployment = load_deployment_map(self.deployment_map_path)
-        contract = deployment["hub_profiles"]["edge-full"]["native_execution"]
-        execution = job["worker_manifest"]["execution"]
-        descriptor = {
-            "schema_version": "ida-native-execution-request.v1",
-            "run_id": "nf-12345678",
-            "profile_id": "edge-full",
-            "backend": "cuda",
-            "artifact_id": "public-artifact-ref",
-            "binary_name": "canopy_foundry_train",
-            "binary_sha256": "a" * 64,
-            "trainer_version": "trainer-ref-v3",
-            "policy_version": "policy-1",
-            "precision_profile": "precision-ref-v3",
-            "optimizer_type": "optimizer-ref-v3",
-            "attention_backend": "attention-ref-v3",
-            "training_mode": "from_scratch",
-            "dataset_id": "dataset-001",
-            "resource_class": "gpu-standard",
-            "max_steps": 1,
-            "timeout_seconds": 60,
-        }
-        with self.assertRaisesRegex(ValueError, "artifact_id"):
-            validate_v3_native_execution_request(
-                descriptor,
-                expected_contract=contract,
-                expected_execution=execution,
-            )
+        self.deployment_map_path.write_text(json.dumps(payload), encoding="utf-8")
+        with self.assertRaisesRegex(WorkerError, "fields are invalid"):
+            manifest_local_request(self.manifest_job(), self.config)
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -1129,26 +1029,6 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
                 "expected_terminal_phase": "native_smoke_complete",
             }), encoding="utf-8"
         )
-        (output / "native-execution-request.json").write_text(json.dumps({
-            "schema_version": "ida-native-execution-request.v1",
-            "run_id": run_id,
-            "profile_id": "edge-full",
-            "backend": "cuda",
-            "artifact_id": "artifact-ref-v3",
-            "binary_name": "ida_native_train",
-            "binary_sha256": "a" * 64,
-            "trainer_version": "trainer-ref-v3",
-            "policy_version": "policy-1",
-            "precision_profile": "precision-ref-v3",
-            "optimizer_type": "optimizer-ref-v3",
-            "attention_backend": "attention-ref-v3",
-            "training_mode": "from_scratch",
-            "dataset_id": "dataset-001",
-            "resource_class": "gpu-standard",
-            "max_steps": 1,
-            "timeout_seconds": 60,
-            "model_contract_id": "hf_gpt2_native_v1",
-        }, indent=2), encoding="utf-8")
         job = {
             "run_id": run_id,
             "worker_manifest": {
@@ -1194,28 +1074,13 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
                     self.execution_receipts.append(receipt)
 
         client = FakeClient()
-        v3_contract = {
-            "schema_version": "ida-native-execution-request.v1",
-            "profile_id": "edge-full",
-            "backend": "cuda",
-            "precision_profile": "precision-ref-v3",
-            "optimizer_type": "optimizer-ref-v3",
-            "attention_backend": "attention-ref-v3",
-        }
-        v3_execution = {
-            "backend": "cuda",
-            "artifact_id": "artifact-ref-v3",
-            "binary_name": "ida_native_train",
-            "binary_sha256": "a" * 64,
-        }
         with patch(
             "scripts.neural_forge_worker.build_command",
             return_value=([sys.executable, "-c", child_code, str(output)], output),
         ), patch(
             "scripts.neural_forge_worker.manifest_local_request",
             return_value=({}, Path(), Path(), {
-                "native_contract": v3_contract,
-                "execution": v3_execution,
+                "execution": {"backend": "cuda"},
             }),
         ), patch("scripts.neural_forge_worker.time.sleep"):
             execute_job(job, replace(self.config, poll_seconds=0.05), client)  # type: ignore[arg-type]
@@ -1280,7 +1145,7 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
             side_effect=lambda process: process.kill(),
         ), patch(
             "scripts.neural_forge_worker.manifest_local_request",
-            return_value=({}, Path(), Path(), {"native_contract": None}),
+            return_value=({}, Path(), Path(), {"execution": {"backend": "cuda"}}),
         ), patch("scripts.neural_forge_worker.time.sleep"):
             execute_job(job, replace(self.config, poll_seconds=0.05), client)  # type: ignore[arg-type]
 
@@ -1526,14 +1391,14 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
         (output / "model.safetensors").write_bytes(b"checkpoint")
         self.assertTrue(completed_metrics(output, run_id="nf-12345678", expected_phase="native_smoke_complete", backend="cuda"))
 
-    def test_completion_accepts_v3_native_receipts_for_each_backend(self) -> None:
+    def test_completion_accepts_native_receipts_for_each_backend(self) -> None:
         for backend, metric_backend in (
             ("cuda", "native"),
             ("cpu", "native_cpu"),
             ("opencl", "native_opencl"),
         ):
             with self.subTest(backend=backend):
-                output = self.config.run_root / f"nf-v3-{backend}123456"
+                output = self.config.run_root / f"nf-native-{backend}123456"
                 output.mkdir(parents=True, exist_ok=True)
                 payload = {
                     "type": "complete",
@@ -1569,15 +1434,14 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
                 self.assertTrue(
                     completed_metrics(
                         output,
-                        run_id=f"nf-v3-{backend}123456",
+                        run_id=f"nf-native-{backend}123456",
                         expected_phase="native_smoke_complete",
                         backend=backend,
-                        v3_native=True,
                     )
                 )
 
-    def test_v3_native_receipt_rejects_a_fabricated_completion_marker(self) -> None:
-        output = self.config.run_root / "nf-v3-fake123456"
+    def test_native_receipt_rejects_a_fabricated_completion_marker(self) -> None:
+        output = self.config.run_root / "nf-native-fake123456"
         output.mkdir(parents=True, exist_ok=True)
         (output / "metrics.json").write_text(json.dumps({
             "type": "complete",
@@ -1589,15 +1453,14 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
         self.assertFalse(
             completed_metrics(
                 output,
-                run_id="nf-v3-fake123456",
+                run_id="nf-native-fake123456",
                 expected_phase="native_smoke_complete",
                 backend="cuda",
-                v3_native=True,
             )
         )
 
-    def test_v3_cuda_receipt_requires_worker_owned_output_and_checkpoint(self) -> None:
-        output = self.config.run_root / "nf-v3-cuda123456"
+    def test_cuda_receipt_requires_worker_owned_output_and_checkpoint(self) -> None:
+        output = self.config.run_root / "nf-native-cuda123456"
         output.mkdir(parents=True, exist_ok=True)
         payload = {
             "type": "complete",
@@ -1611,10 +1474,9 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
         self.assertFalse(
             completed_metrics(
                 output,
-                run_id="nf-v3-cuda123456",
+                run_id="nf-native-cuda123456",
                 expected_phase="native_smoke_complete",
                 backend="cuda",
-                v3_native=True,
             )
         )
         payload["output"] = str(output.resolve())
@@ -1623,10 +1485,9 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
         self.assertFalse(
             completed_metrics(
                 output,
-                run_id="nf-v3-cuda123456",
+                run_id="nf-native-cuda123456",
                 expected_phase="native_smoke_complete",
                 backend="cuda",
-                v3_native=True,
             )
         )
 

@@ -31,9 +31,6 @@ try:
     from scripts.compatibility import (
         BACKEND_POLICIES,
         MANIFEST_SCHEMA_VERSION,
-        NATIVE_EXECUTION_REQUEST_SCHEMA_VERSION,
-        project_v3_native_execution_request,
-        validate_v3_native_execution_request,
     )
     from scripts.private_adapter import PrivateAdapterError, load_private_adapter
     from scripts.deployment_map import (
@@ -70,9 +67,6 @@ except ModuleNotFoundError:
     from compatibility import (
         BACKEND_POLICIES,
         MANIFEST_SCHEMA_VERSION,
-        NATIVE_EXECUTION_REQUEST_SCHEMA_VERSION,
-        project_v3_native_execution_request,
-        validate_v3_native_execution_request,
     )
     from private_adapter import PrivateAdapterError, load_private_adapter
     from deployment_map import (
@@ -139,8 +133,8 @@ NATIVE_TRAINING_FIELDS = {
 NATIVE_INPUT_FIELDS = {"token_blocks", "label_blocks", "seg_blocks", "batch_size", "sequence_length", "shape"}
 TRAINING_MODES = {"from_scratch", "fine_tune", "resume"}
 DISABLED_OPTIMIZERS = {"adam", "adamw"}
-V3_METRIC_BACKENDS = {"cuda": "native", "cpu": "native_cpu", "opencl": "native_opencl"}
-V3_NATIVE_EXPECTED_PHASE = "native_smoke_complete"
+NATIVE_METRIC_BACKENDS = {"cuda": "native", "cpu": "native_cpu", "opencl": "native_opencl"}
+NATIVE_EXPECTED_PHASE = "native_smoke_complete"
 TERMINAL_RUN_STATUSES = {"succeeded", "failed", "cancelled"}
 HUB_STATE_POLL_MAX_SECONDS = 5.0
 HUB_FINALIZATION_MARGIN_SECONDS = 1.0
@@ -653,6 +647,10 @@ def manifest_private_adapter_local_request(
     if not isinstance(local_request, dict) or not isinstance(source_manifest_path, Path) or \
             not isinstance(dataset_path, Path) or not isinstance(resolved, dict):
         raise WorkerError("private adapter local binding returned an invalid result")
+    if resolved.get("private_execution_kind") != "adapter" or not isinstance(
+        resolved.get("private_execution"), dict
+    ):
+        raise WorkerError("private adapter local binding omitted its private execution descriptor")
     return local_request, source_manifest_path, dataset_path, resolved
 
 
@@ -879,22 +877,6 @@ def manifest_local_request(
             adapter=private_adapter,
         )
 
-    native_execution: dict[str, Any] | None = None
-    native_execution_kind: str | None = None
-    native_contract: dict[str, Any] | None = None
-    if mapping.get("native_execution") is not None:
-        try:
-            native_execution_kind = mapping.get("native_execution_kind")
-            native_contract = mapping["native_execution"]
-            native_execution = project_v3_native_execution_request(
-                manifest,
-                profile_id=profile_id,
-                execution=execution,
-                native_contract=native_contract,
-            )
-            native_execution_kind = "v3"
-        except ValueError as exc:
-            raise WorkerError(str(exc)) from exc
     if private_native:
         raise WorkerError("private manifest policy requires a private execution adapter mapping")
 
@@ -913,29 +895,15 @@ def manifest_local_request(
     approved_contracts = profile.get("model_contract_ids", [])
     precision = profile_binding.get("precision")
     optimizer = profile_binding.get("optimizer")
-    if native_execution is None:
-        if not isinstance(optimizer, str) or optimizer.lower() in DISABLED_OPTIMIZERS:
-            raise WorkerError("Adam and AdamW optimizers are disabled")
-        if precision not in profile["supported_precisions"] or optimizer not in profile["supported_optimizers"]:
-            raise WorkerError("local profile settings are not approved")
-    elif (
-        precision != native_execution["precision_profile"]
-        or optimizer != native_execution["optimizer_type"]
-    ):
-        raise WorkerError(
-            "local profile settings do not match the native contract"
-        )
+    if not isinstance(optimizer, str) or optimizer.lower() in DISABLED_OPTIMIZERS:
+        raise WorkerError("Adam and AdamW optimizers are disabled")
+    if precision not in profile["supported_precisions"] or optimizer not in profile["supported_optimizers"]:
+        raise WorkerError("local profile settings are not approved")
 
     config_path = bound_asset(config.config_root, profile_binding, "profile config")
     local_config = load_local_config(config_path)
-    if (
-        native_execution is not None
-        and local_config.get("attention_backend", "scalar_flash")
-        != native_execution["attention_backend"]
-    ):
-        raise WorkerError(
-            "local profile attention does not match the native contract"
-        )
+    if local_config.get("attention_backend", "scalar_flash") not in profile["supported_attention"]:
+        raise WorkerError("local profile attention is not approved")
     declared_model_contract = local_config.get("model", {}).get("architecture_contract")
     if model_contract_id is not None:
         if declared_model_contract != model_contract_id:
@@ -1017,9 +985,6 @@ def manifest_local_request(
         "model_contract_id": model_contract_id,
         "private_runtime": private_runtime,
         "private_runtime_package": private_runtime_package,
-        "native_execution": native_execution,
-        "native_execution_kind": native_execution_kind,
-        "native_contract": native_contract,
     }
 
 
@@ -1033,24 +998,7 @@ def native_request_file(
     run_id: str,
     approved_max_steps: int | None = None,
     approved_attention: list[str] | None = None,
-    native_execution: dict[str, Any] | None = None,
-    native_execution_kind: str | None = None,
-    native_contract: dict[str, Any] | None = None,
-    execution_attestation: dict[str, Any] | None = None,
 ) -> Path:
-    if native_execution is not None:
-        try:
-            if native_contract is None or execution_attestation is None:
-                raise WorkerError("native deployment bindings are required")
-            native_execution = validate_v3_native_execution_request(
-                native_execution,
-                expected_run_id=run_id,
-                expected_contract=native_contract,
-                expected_execution=execution_attestation,
-            )
-            native_execution_kind = "v3"
-        except ValueError as exc:
-            raise WorkerError(str(exc)) from exc
     config = load_local_config(config_path)
     unknown = set(config) - NATIVE_TOP_LEVEL_FIELDS - {
         "required_arch", "repo_root", "runtime", "precision", "optimizer_type",
@@ -1067,10 +1015,7 @@ def native_request_file(
     native: dict[str, Any] = {
         key: config[key] for key in NATIVE_TOP_LEVEL_FIELDS if key in config
     }
-    native.setdefault(
-        "attention_backend",
-        native_execution["attention_backend"] if native_execution is not None else "scalar_flash",
-    )
+    native.setdefault("attention_backend", "scalar_flash")
     device = project_native_section(config, "device", NATIVE_DEVICE_FIELDS)
     if "required_arch" in config and "required_arch" not in device:
         device["required_arch"] = config["required_arch"]
@@ -1111,37 +1056,23 @@ def native_request_file(
     policy = BACKEND_POLICIES.get(backend)
     precision = request.get("precision")
     optimizer = request.get("optimizer")
-    if native_execution is not None:
-        if (
-            backend != native_execution["backend"]
-            or precision != native_execution["precision_profile"]
-            or optimizer != native_execution["optimizer_type"]
-        ):
-            raise WorkerError("local request does not match the native contract")
-        precision = native_execution["precision_profile"]
-        optimizer = native_execution["optimizer_type"]
-    else:
-        if policy is None:
-            raise WorkerError("native backend is not publicly supported")
-        if not isinstance(optimizer, str) or optimizer.lower() in DISABLED_OPTIMIZERS:
-            raise WorkerError("Adam and AdamW optimizers are disabled")
-        if not isinstance(precision, str) or precision.strip() not in policy.supported_precisions:
-            raise WorkerError("precision is invalid")
-        if optimizer not in policy.supported_optimizers:
-            raise WorkerError("native optimizer is invalid")
+    if policy is None:
+        raise WorkerError("native backend is not publicly supported")
+    if not isinstance(optimizer, str) or optimizer.lower() in DISABLED_OPTIMIZERS:
+        raise WorkerError("Adam and AdamW optimizers are disabled")
+    if not isinstance(precision, str) or precision.strip() not in policy.supported_precisions:
+        raise WorkerError("precision is invalid")
+    if optimizer not in policy.supported_optimizers:
+        raise WorkerError("native optimizer is invalid")
     if policy is not None and native["attention_backend"] not in policy.supported_attention:
-        if native_execution is None:
-            raise WorkerError("attention backend is invalid for selected backend")
-    if native_execution is not None and native["attention_backend"] != native_execution["attention_backend"]:
-        raise WorkerError("local config attention does not match the native contract")
+        raise WorkerError("attention backend is invalid for selected backend")
     if approved_attention is not None and native["attention_backend"] not in approved_attention:
-        if native_execution is None:
-            raise WorkerError("attention backend is not approved for selected profile")
+        raise WorkerError("attention backend is not approved for selected profile")
     native["device"]["runtime"] = backend
     default_arch = "gfx1036" if backend in {"opencl", "hip"} else "host" if backend == "cpu" else "sm_90"
     native["device"].setdefault("required_arch", default_arch)
 
-    if policy is not None and policy.smoke_only and native_execution_kind is None:
+    if policy.smoke_only:
         device = native["device"]
         model = native["model"]
         training = native["training"]
@@ -1195,14 +1126,10 @@ def native_request_file(
     native["precision_profile"] = precision.strip()
     native["optimizer_type"] = optimizer
     native["output_dir"] = str(output_path)
-    if native_execution is None:
-        # The public Foundry binary owns these supervisor paths.  V3's native
-        # parser deliberately rejects them so a private V3 request cannot
-        # inherit Foundry orchestration state as if it were engine input.
-        native["job_id"] = run_id
-        native["status_file"] = str(output_path / "status.json")
-        native["repo_root"] = str(output_path)
-        native.setdefault("expected_terminal_phase", V3_NATIVE_EXPECTED_PHASE)
+    native["job_id"] = run_id
+    native["status_file"] = str(output_path / "status.json")
+    native["repo_root"] = str(output_path)
+    native.setdefault("expected_terminal_phase", NATIVE_EXPECTED_PHASE)
 
     max_steps = request.get("max_steps")
     if max_steps is not None:
@@ -1225,13 +1152,6 @@ def native_request_file(
             native[native_field] = str(relative_ref(artifact_root, request[field], field))
 
     output_path.mkdir(parents=True, exist_ok=True)
-    if native_execution is not None:
-        try:
-            (output_path / "native-execution-request.json").write_text(
-                json.dumps(native_execution, indent=2) + "\n", encoding="utf-8"
-            )
-        except OSError as exc:
-            raise WorkerError("native execution request could not be recorded") from exc
     request_path = output_path / "native-request.json"
     try:
         request_path.write_text(json.dumps(native, indent=2) + "\n", encoding="utf-8")
@@ -1700,12 +1620,7 @@ def build_command(job: dict[str, Any], config: WorkerConfig) -> tuple[list[str],
     request, config_path, dataset_path, resolved = manifest_local_request(job, config)
     attestation = resolved["execution"]
     approved_max_steps = resolved["policy"]["max_steps"]
-    native_execution = resolved.get("native_execution")
-    approved_attention = (
-        [native_execution["attention_backend"]]
-        if isinstance(native_execution, dict) and "attention_backend" in native_execution
-        else resolved["profile"]["supported_attention"]
-    )
+    approved_attention = resolved["profile"]["supported_attention"]
     approved_kernel_sha256 = resolved["kernel_sha256"]
     approved_kernel_source = resolved["kernel_source"]
     binding = resolved["binding"]
@@ -1721,7 +1636,7 @@ def build_command(job: dict[str, Any], config: WorkerConfig) -> tuple[list[str],
                 raise WorkerError("local run output already exists")
         except OSError as exc:
             raise WorkerError("local run output is unavailable") from exc
-    if resolved.get("native_execution_kind") == "adapter":
+    if resolved.get("private_execution_kind") == "adapter":
         binary = resolved.get("private_adapter_binary")
         if not isinstance(binary, Path) or not binary.is_file():
             raise WorkerError("private adapter native binary is unavailable")
@@ -1740,8 +1655,8 @@ def build_command(job: dict[str, Any], config: WorkerConfig) -> tuple[list[str],
                 raise WorkerError("OpenCL kernel attestation failed")
         except BindingError as exc:
             raise WorkerError("OpenCL kernel is unavailable") from exc
-    if resolved.get("native_execution_kind") == "adapter":
-        descriptor = resolved.get("native_execution")
+    if resolved.get("private_execution_kind") == "adapter":
+        descriptor = resolved.get("private_execution")
         if not isinstance(descriptor, dict):
             raise WorkerError("private native execution descriptor is unavailable")
         try:
@@ -1787,10 +1702,6 @@ def build_command(job: dict[str, Any], config: WorkerConfig) -> tuple[list[str],
             run_id=run_id,
             approved_max_steps=approved_max_steps,
             approved_attention=approved_attention,
-            native_execution=resolved.get("native_execution"),
-            native_execution_kind=resolved.get("native_execution_kind"),
-            native_contract=resolved.get("native_contract"),
-            execution_attestation=attestation,
         )
     command = [
         str(binary),
@@ -1809,7 +1720,6 @@ def completed_metrics(
     run_id: str,
     expected_phase: str,
     backend: str,
-    v3_native: bool = False,
     private_adapter_native: bool = False,
     adapter: Any | None = None,
     native_descriptor: dict[str, Any] | None = None,
@@ -1822,9 +1732,7 @@ def completed_metrics(
             continue
         if not isinstance(payload, dict):
             continue
-        if filename == "metrics.json" and v3_native and _valid_v3_native_metrics(
-            payload, output_path, backend
-        ):
+        if filename == "metrics.json" and _valid_native_metrics(payload, output_path, backend):
             return True
         if filename == "metrics.json" and private_adapter_native and adapter is not None and adapter.valid_metrics(payload, native_descriptor or {}):
             return True
@@ -1850,12 +1758,12 @@ def completed_metrics(
     return False
 
 
-def _valid_v3_native_metrics(
+def _valid_native_metrics(
     payload: dict[str, Any], output_path: Path, backend: str
 ) -> bool:
-    """Require the complete receipt shape emitted by the V3 native launchers."""
+    """Require the complete receipt shape emitted by a native launcher."""
 
-    if payload.get("backend") != V3_METRIC_BACKENDS.get(backend):
+    if payload.get("backend") != NATIVE_METRIC_BACKENDS.get(backend):
         return False
     if payload.get("type") != "complete" or payload.get("status") != "complete":
         return False
@@ -2046,8 +1954,7 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
         return
     try:
         _, _, _, resolved_manifest = manifest_local_request(job, config)
-        native_contract = resolved_manifest.get("native_contract")
-        execution_attestation = resolved_manifest.get("execution")
+        private_contract = resolved_manifest.get("private_contract")
     except WorkerError:
         publish_terminal_update(
             client, receipt_store, run_id, receipt_identity,
@@ -2078,39 +1985,25 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
             (output_path / "native-request.json").read_text(encoding="utf-8")
         )
         native_descriptor = None
-        v3_native = False
         private_adapter_native = False
         private_adapter = None
         descriptor_path = output_path / "native-execution-request.json"
         if descriptor_path.is_file():
             native_descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
             schema_version = native_descriptor.get("schema_version") if isinstance(native_descriptor, dict) else None
-            if schema_version == NATIVE_EXECUTION_REQUEST_SCHEMA_VERSION:
-                validate_v3_native_execution_request(
-                    native_descriptor,
-                    expected_run_id=run_id,
-                    expected_contract=native_contract,
-                    expected_execution=execution_attestation,
-                )
-                v3_native = True
-            else:
-                private_adapter = load_private_adapter()
-                if private_adapter is None or not private_adapter.is_request_schema(schema_version):
-                    raise ValueError
-                worker_manifest = job.get("worker_manifest") or job.get("manifest")
-                private_adapter.validate_descriptor(
-                    native_descriptor,
-                    expected_manifest=worker_manifest,
-                    expected_contract=native_contract,
-                    expected_profile_id=(worker_manifest or {}).get("request", {}).get("training_profile_id"),
-                    expected_fingerprint=native_descriptor.get("request_sha256"),
-                )
-                private_adapter_native = True
-        expected_phase = (
-            V3_NATIVE_EXPECTED_PHASE
-            if v3_native
-            else native_request["expected_terminal_phase"]
-        )
+            private_adapter = load_private_adapter()
+            if private_adapter is None or not private_adapter.is_request_schema(schema_version):
+                raise ValueError
+            worker_manifest = job.get("worker_manifest") or job.get("manifest")
+            private_adapter.validate_descriptor(
+                native_descriptor,
+                expected_manifest=worker_manifest,
+                expected_contract=private_contract,
+                expected_profile_id=(worker_manifest or {}).get("request", {}).get("training_profile_id"),
+                expected_fingerprint=native_descriptor.get("request_sha256"),
+            )
+            private_adapter_native = True
+        expected_phase = native_request["expected_terminal_phase"]
         backend = native_request["device"]["runtime"]
         if not isinstance(expected_phase, str) or not isinstance(backend, str):
             raise ValueError
@@ -2326,7 +2219,6 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
         run_id=run_id,
         expected_phase=expected_phase,
         backend=backend,
-        v3_native=v3_native,
         private_adapter_native=private_adapter_native,
         adapter=private_adapter,
         native_descriptor=native_descriptor,

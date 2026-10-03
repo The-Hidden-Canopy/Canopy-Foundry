@@ -1,6 +1,11 @@
 #pragma once
 
 #include "canopy_foundry/execution/capability.hpp"
+#include "canopy_foundry/checkpoint/generation.hpp"
+#include "canopy_foundry/memory/allocation_plan.hpp"
+#include "canopy_foundry/optimizer/plan.hpp"
+#include "canopy_foundry/parallel/plan.hpp"
+#include "canopy_foundry/precision/execution_view.hpp"
 #include "ida_native/request.hpp"
 
 #include <string>
@@ -41,21 +46,37 @@ struct PrecisionPlan {
     std::string accumulators;
     std::string optimizer_state;
     std::string normalization;
+    // Explicit role identities are the stable contract used by execution
+    // views. The legacy strings above remain for request compatibility.
+    NumericFormat master_format{NumericFormat::Unknown};
+    NumericFormat forward_format{NumericFormat::Unknown};
+    NumericFormat backward_dx_format{NumericFormat::Unknown};
+    NumericFormat packed_view_format{NumericFormat::Unknown};
+    NumericFormat gradient_format{NumericFormat::Unknown};
+    NumericFormat accumulator_format{NumericFormat::Unknown};
+    NumericFormat optimizer_state_format{NumericFormat::Unknown};
+    NumericFormat normalization_format{NumericFormat::Unknown};
 };
 
-struct OptimizerPlan {
-    std::string type;
-    std::string state_precision;
+struct MoePlan {
+    std::string route_ownership{"none"};
+    std::string dispatch_mode{"unresolved"};
+    bool route_generation_required{false};
 };
 
 struct ExecutionPlan {
     std::string schema{"canopy-foundry-execution-plan.v1"};
-    std::string planner_revision{"planner-foundation-v1"};
+    std::string planner_revision{"planner-foundation-v2-port-v1"};
     DevicePlan device;
     ModelPlan model;
     PrecisionPlan precision;
     OptimizerPlan optimizer;
+    MoePlan moe;
+    MemoryPlan memory;
+    ParallelPlan parallel;
+    CheckpointPlan checkpoint;
     std::string attention_backend;
+    std::string receipt_schema{"canopy-foundry-execution-receipt.v1"};
     std::vector<std::string> required_capabilities;
     bool accepted{false};
     bool runtime_verification_required{false};

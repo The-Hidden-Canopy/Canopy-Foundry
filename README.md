@@ -7,16 +7,19 @@ The public repository contains the runtime capability. The Hidden Canopy Hub
 remains the authenticated coordination and authority layer.
 
 The Hub-to-worker integration accepts the canonical
-`neural-forge-worker-manifest.v2` envelope. A deployment can explicitly map a
-Hub profile to IDA Train v3 through a private
-`ida-native-execution-request.v1` contract in the deployment map. That private
-contract pins the V3 profile settings and, optionally, the binary digest; it
-does not alter the public capability catalog or translate AdamW/WGMMA requests
-to the public Lion/scalar route.
+`neural-forge-worker-manifest.v2` envelope. A deployment may bind a Hub
+profile to a deployment-owned local execution adapter through the ignored
+private-runtime boundary. Adapter schemas, recipes, kernel choices, and
+binary-specific settings stay outside the public catalog; the adapter must
+return a bounded local request or fail closed. This keeps Foundry standalone
+while allowing the Hub to coordinate approved deployments without becoming a
+second execution engine.
 
 ## Public Boundary and Runtime Hardening Update
 
-The current public release is commit [`145c7b2`](https://github.com/The-Hidden-Canopy/Canopy-Foundry/commit/145c7b2fe169c19726d0d92074925b87f7f39eb8).
+The last published public release is commit [`145c7b2`](https://github.com/The-Hidden-Canopy/Canopy-Foundry/commit/145c7b2fe169c19726d0d92074925b87f7f39eb8).
+The working tree may contain unreleased engineering work; release claims below
+refer to that published snapshot, not to an uncommitted checkout.
 
 This update strengthens the boundary between local training capability and the
 separate Hidden Canopy Hub coordination layer.
@@ -34,8 +37,8 @@ It adds:
 
 The public tree contains no private runtime packages, model data, checkpoints,
 credentials, local filesystem paths, raw logs, or private historical paths.
-The public boundary and reachable Git history both pass the release checks, and
-84 Foundry tests pass for this update.
+The published snapshot passed the public-boundary and reachable-history release
+checks. A current checkout must rerun those checks after local changes.
 
 This is a source-available release, not a claim of universal hardware or
 production parity. Native CMake, CUDA, OpenCL, and hardware-specific
@@ -64,6 +67,62 @@ separate commercial license from The Hidden Canopy LLC.
 Neural Foundry provides native local model training through a C++20/CUDA
 runtime with explicit validation, device handling, checkpoint contracts, and
 locally owned configuration.
+
+The repository also includes a dependency-free [local execution
+console](frontend/index.html). It reads selected request, plan, capability, or
+receipt-shaped JSON into browser memory for inspection; it does not connect to
+the Hub, launch a run, resolve hardware, or turn a displayed contract into
+runtime evidence.
+
+The native foundry_shell target provides the same bounded local lens as a
+Windows Win32/GDI window and a Linux X11 window when the X11 development
+package is present. It owns window lifecycle and presentation only. Use
+foundry_shell --document REQUEST.json to inspect a local document; it never
+launches training or creates a Hub connection. Both native backends carry the
+terminal-ready IDA CLI presentation atlas and animate its local WALK poses as
+a visual companion; that animation is not model, run, or Hub evidence. The
+optional `foundry_shell --simulate` mode adds a deterministic execution
+theater: a synthetic request moves through planning, routing, execution, and
+checkpoint stages with clearly marked simulated values. It is an explorable
+teaching surface, not a trainer or a receipt generator.
+
+## Native shell quick start
+
+The native shell has two presentation backends. Choose the instructions for
+the operating system where the shell will run.
+
+### Windows / Win32-GDI
+
+From PowerShell at the repository root:
+
+    cmake -S . -B build -DIDA_NATIVE_ENABLE_CUDA=OFF
+    cmake --build build --target foundry_shell --config Release
+    .\\bin\\foundry_shell.exe --check
+    .\\bin\\foundry_shell.exe --simulate
+
+The Windows shell uses Win32/GDI and does not require X11, a browser runtime,
+or a web server. To inspect a local contract instead of opening the theater:
+
+    .\\bin\\foundry_shell.exe --document path\\to\\request.json
+
+### Linux / X11
+
+Install the X11 development package, then build with the X11 backend enabled:
+
+    sudo apt install libx11-dev
+    cmake -S . -B build -DCANOPY_FOUNDRY_ENABLE_X11_SHELL=ON
+    cmake --build build --target foundry_shell
+    ./bin/foundry_shell --check
+    ./bin/foundry_shell --simulate
+
+The Linux shell uses X11 when its headers and library are discoverable. If
+X11 is unavailable, the build intentionally provides only diagnostic and
+headless behavior; it does not claim that a native Linux window exists.
+
+Both shells expose the same controls: `S` starts or restarts the simulation,
+`P` or `Space` pauses/resumes it, and `R` resets it. The simulation is local
+and synthetic on both platforms: it does not launch training, contact the
+Hub, write checkpoints, or create execution evidence.
 
 Users bring their own:
 
@@ -207,12 +266,12 @@ Worker events are:
 
 Kernel telemetry is disabled by default. An operator may pass
 `--kernel-telemetry DIR` to the native executable; this enables the bounded
-V2-style kernel ontology stream and writes a local bundle containing
+bounded local kernel ontology stream and writes a local bundle containing
 `kernel_ontology.jsonl`, `training_metrics.jsonl`, and `receipt.json`. The
 native binary never performs a network request. The public IDA CLI can validate
 and explicitly upload that directory with `ida telemetry share-kernel`.
 The bundle records launch geometry, host-enqueue timing, and step diagnostics
-for the public launch sites wrapped by the ontology macro;
+for the public launch sites covered by the bounded local instrumentation;
 it does not claim device elapsed kernel time, hardware-counter occupancy, or
 promotion eligibility. Paths, datasets, checkpoints, credentials, identifiers,
 raw logs, and private diagnostics remain local.

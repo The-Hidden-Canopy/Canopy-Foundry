@@ -1,9 +1,9 @@
 # Canopy Foundry request admission
 
-The former loopback HTTP adapter is retired. This directory contains only an
-in-process request validator for the governed external wrapper; it does not
-bind a port, accept bearer tokens, launch a child process, or publish
-telemetry.
+The former loopback HTTP adapter is retired. The implementation now lives in
+`foundry/admission/request_admission.py`; this directory contains only a
+compatibility import for older wrappers. Foundry does not bind a port, accept
+bearer tokens, launch a child process, or publish telemetry.
 
 The native executable remains a one-shot CLI. The `ida_native_train` name is
 retained for wrapper compatibility; the public runtime identity is Neural

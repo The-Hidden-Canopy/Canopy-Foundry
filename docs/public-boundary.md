@@ -29,12 +29,14 @@ The published tree may contain:
 - the bounded local kernel-telemetry contract, which is disabled by default;
 - build, test, and boundary-review documentation.
 
-The `api/` directory is deliberately not an HTTP API. It must not bind a
-socket, accept bearer tokens, launch a child process, expose a telemetry
-endpoint, or make organization, role, audit, transition, or promotion
-decisions. The native executable can write a bounded telemetry bundle only
-when an operator explicitly supplies `--kernel-telemetry DIR`; it never
-uploads that bundle.
+The local admission implementation lives in
+`foundry/admission/request_admission.py`. The `api/` directory is now only a
+compatibility import and is deliberately not an HTTP API. Neither path may
+bind a socket, accept bearer tokens, launch a child process, expose a
+telemetry endpoint, or make organization, role, audit, transition, or
+promotion decisions. The native executable can write a bounded telemetry
+bundle only when an operator explicitly supplies `--kernel-telemetry DIR`; it
+never uploads that bundle.
 
 ## Local-only contents
 
@@ -50,6 +52,16 @@ The public bundle is not generated or tracked by the repository. If an
 operator explicitly chooses to share it, `IDA_CLI-Public` validates the fresh
 bundle and POSTs it only to the operator-supplied HTTPS endpoint. This is a
 transport action, not Hub authorization, audit, or promotion evidence.
+
+## Ported execution work
+
+The `include/canopy_foundry/` port contracts are public only when they remain
+backend-neutral, opaque, and fail-closed. Donor source paths, private kernel
+implementations, deployment recipes, raw benchmark traces, model data, and
+private evidence stay outside this repository. A port ledger may describe the
+invariant and the local test that proves it, but it must not disclose donor
+source listings or implementation details that belong behind the Hub and the
+deployment boundary.
 
 Local references cross the Hub boundary as opaque IDs. The worker resolves
 those IDs through its local binding, verifies integrity pins, and sends back

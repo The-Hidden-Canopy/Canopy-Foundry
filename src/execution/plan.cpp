@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -151,6 +152,7 @@ json capability_json(const CapabilityStatus& capability) {
         {"id", capability.id},
         {"state", capability_state_name(capability.state)},
         {"evidence", capability.evidence},
+        {"evidence_tier", evidence_tier_name(capability.evidence_tier)},
     };
 }
 
@@ -187,12 +189,86 @@ json plan_json_value(const ExecutionPlan& plan) {
             {"accumulators", plan.precision.accumulators},
             {"optimizer_state", plan.precision.optimizer_state},
             {"normalization", plan.precision.normalization},
+            {"master_format", std::string(numeric_format_name(
+                plan.precision.master_format))},
+            {"forward_format", std::string(numeric_format_name(
+                plan.precision.forward_format))},
+            {"backward_dx_format", std::string(numeric_format_name(
+                plan.precision.backward_dx_format))},
+            {"packed_view_format", std::string(numeric_format_name(
+                plan.precision.packed_view_format))},
+            {"gradient_format", std::string(numeric_format_name(
+                plan.precision.gradient_format))},
+            {"accumulator_format", std::string(numeric_format_name(
+                plan.precision.accumulator_format))},
+            {"optimizer_state_format", std::string(numeric_format_name(
+                plan.precision.optimizer_state_format))},
+            {"normalization_format", std::string(numeric_format_name(
+                plan.precision.normalization_format))},
         }},
         {"optimizer", {
             {"type", plan.optimizer.type},
             {"state_precision", plan.optimizer.state_precision},
+            {"owner", optimizer_owner_name(plan.optimizer.owner)},
+            {"overlap_enabled", plan.optimizer.overlap_enabled},
+            {"group_count", plan.optimizer.groups.size()},
+        }},
+        {"moe", {
+            {"route_ownership", plan.moe.route_ownership},
+            {"dispatch_mode", plan.moe.dispatch_mode},
+            {"route_generation_required", plan.moe.route_generation_required},
+        }},
+        {"memory", {
+            {"persistent", {
+                {"device_bytes", plan.memory.persistent.device_bytes},
+                {"pinned_host_bytes", plan.memory.persistent.pinned_host_bytes},
+                {"pageable_host_bytes", plan.memory.persistent.pageable_host_bytes},
+            }},
+            {"per_microstep", {
+                {"device_bytes", plan.memory.per_microstep.device_bytes},
+                {"pinned_host_bytes", plan.memory.per_microstep.pinned_host_bytes},
+                {"pageable_host_bytes", plan.memory.per_microstep.pageable_host_bytes},
+            }},
+            {"checkpoint_peak", {
+                {"device_bytes", plan.memory.checkpoint_peak.device_bytes},
+                {"pinned_host_bytes", plan.memory.checkpoint_peak.pinned_host_bytes},
+                {"pageable_host_bytes", plan.memory.checkpoint_peak.pageable_host_bytes},
+            }},
+            {"estimated_peak", {
+                {"device_bytes", plan.memory.estimated_peak.device_bytes},
+                {"pinned_host_bytes", plan.memory.estimated_peak.pinned_host_bytes},
+                {"pageable_host_bytes", plan.memory.estimated_peak.pageable_host_bytes},
+            }},
+            {"device_reserve_bytes", plan.memory.device_reserve_bytes},
+            {"host_reserve_bytes", plan.memory.host_reserve_bytes},
+            {"master_residency", residency_name(plan.memory.master_residency)},
+            {"optimizer_state_residency", residency_name(plan.memory.optimizer_state_residency)},
+            {"activation_policy", plan.memory.activation_policy},
+            {"estimate_valid", plan.memory.estimate_valid},
+            {"runtime_capacity_verified", plan.memory.runtime_capacity_verified},
+            {"rejection", plan.memory.rejection.empty()
+                ? json(nullptr) : json(plan.memory.rejection)},
+        }},
+        {"parallel", {
+            {"mode", parallel_mode_name(plan.parallel.mode)},
+            {"transport", transport_kind_name(plan.parallel.transport)},
+            {"schedule", pipeline_schedule_name(plan.parallel.schedule)},
+            {"devices", plan.parallel.devices},
+            {"pipeline_split_layer", plan.parallel.pipeline_split_layer},
+            {"topology_probe_required", plan.parallel.topology_probe_required},
+            {"transport_explicit", plan.parallel.transport_explicit},
+            {"runtime_verified", plan.parallel.runtime_verified},
+        }},
+        {"checkpoint", {
+            {"purpose", checkpoint_purpose_name(plan.checkpoint.purpose)},
+            {"atomic_publication", plan.checkpoint.atomic_publication},
+            {"generation_validation_required", plan.checkpoint.generation_validation_required},
+            {"exact_resume_requested", plan.checkpoint.exact_resume_requested},
+            {"exact_resume_supported", plan.checkpoint.exact_resume_supported},
+            {"model_export_complete", plan.checkpoint.model_export_complete},
         }},
         {"attention_backend", plan.attention_backend},
+        {"receipt_schema", plan.receipt_schema},
         {"required_capabilities", plan.required_capabilities},
         {"admission", {
             {"accepted", plan.accepted},
@@ -211,19 +287,85 @@ void add_capability(
     capabilities.entries.push_back({std::move(id), state, std::move(evidence)});
 }
 
-}  // namespace
-
-std::string capability_state_name(CapabilityState state) {
-    switch (state) {
-    case CapabilityState::Available: return "AVAILABLE";
-    case CapabilityState::Unavailable: return "UNAVAILABLE";
-    case CapabilityState::Experimental: return "EXPERIMENTAL";
-    case CapabilityState::BuildDisabled: return "BUILD_DISABLED";
-    case CapabilityState::HardwareUnsupported: return "HARDWARE_UNSUPPORTED";
-    case CapabilityState::RuntimeUnverified: return "RUNTIME_UNVERIFIED";
+bool shape_memory_bytes(
+    const ida_native::NativeRequest& request,
+    const PrecisionPlan& precision,
+    MemoryInputs& inputs
+) {
+    const auto positive = [](int value) -> std::uint64_t {
+        return value > 0 ? static_cast<std::uint64_t>(value) : 0;
+    };
+    const auto hidden = positive(request.model.hidden_size);
+    const auto intermediate = positive(request.model.intermediate_size);
+    const auto layers = positive(request.model.layers);
+    const auto vocab = positive(request.model.vocab_size);
+    std::uint64_t term = 0;
+    std::uint64_t layer_elements = 0;
+    if (!checked_multiply(hidden, hidden, term) ||
+        !checked_multiply(term, 4, term) ||
+        !checked_add(layer_elements, term, layer_elements) ||
+        !checked_multiply(hidden, intermediate, term) ||
+        !checked_multiply(term, 3, term) ||
+        !checked_add(layer_elements, term, layer_elements) ||
+        !checked_multiply(hidden, 2, term) ||
+        !checked_add(layer_elements, term, layer_elements) ||
+        !checked_multiply(layer_elements, layers, layer_elements) ||
+        !checked_multiply(vocab, hidden, term) ||
+        !checked_add(layer_elements, term, layer_elements)) {
+        return false;
     }
-    return "UNAVAILABLE";
+
+    const auto bytes_for = [](NumericFormat format) -> std::uint64_t {
+        switch (format) {
+        case NumericFormat::BF16:
+        case NumericFormat::FP8E4M3:
+        case NumericFormat::MXFP8E4M3UE8M0K32:
+        case NumericFormat::NVFP4E2M1UE4M3:
+            return format == NumericFormat::BF16 ? 2 : 1;
+        case NumericFormat::F32:
+        case NumericFormat::Unknown:
+            return 4;
+        }
+        return 4;
+    };
+    std::uint64_t bytes = 0;
+    if (!checked_multiply(layer_elements, bytes_for(precision.master_format), bytes)) {
+        return false;
+    }
+    inputs.persistent.device_bytes = bytes;
+    if (!checked_multiply(
+            layer_elements,
+            bytes_for(precision.gradient_format == NumericFormat::Unknown
+                ? NumericFormat::F32 : precision.gradient_format),
+            bytes)) {
+        return false;
+    }
+    if (!checked_add(inputs.persistent.device_bytes, bytes, inputs.persistent.device_bytes)) {
+        return false;
+    }
+    if (!checked_multiply(layer_elements, bytes_for(precision.optimizer_state_format), bytes) ||
+        !checked_add(inputs.persistent.device_bytes, bytes, inputs.persistent.device_bytes)) {
+        return false;
+    }
+
+    const auto microbatch = positive(request.training.microbatch > 0
+        ? request.training.microbatch : request.input.batch_size);
+    const auto sequence = positive(request.input.sequence_length);
+    std::uint64_t activation_elements = 0;
+    if (!checked_multiply(microbatch, sequence, activation_elements) ||
+        !checked_multiply(activation_elements, layers, activation_elements) ||
+        !checked_multiply(activation_elements, hidden, activation_elements) ||
+        !checked_multiply(activation_elements, 2, activation_elements) ||
+        !checked_multiply(activation_elements, 2, inputs.per_microstep.device_bytes)) {
+        return false;
+    }
+
+    inputs.checkpoint_peak = inputs.persistent;
+    inputs.activation_policy = "resident";
+    return true;
 }
+
+}  // namespace
 
 RuntimeCapabilities RuntimeCapabilities::from_build(
     bool cuda_enabled,
@@ -329,11 +471,38 @@ PlanResolution resolve_execution_plan(
     plan.model.moe = request.model.num_cognitive_routes > 0 ||
         request.model.num_personality_experts > 0 ||
         request.model.generic_moe_num_experts > 0;
+    plan.moe.route_ownership = plan.model.moe ? "forward_owned" : "none";
+    plan.moe.route_generation_required = plan.model.moe;
+    plan.parallel.devices = request.device.model_parallel_devices;
+    plan.parallel.pipeline_split_layer = request.device.pipeline_split_layer;
+    plan.parallel.transport_explicit = request.device.peer_transport != "" &&
+        request.device.peer_transport != "auto";
+    if (plan.parallel.devices.empty()) {
+        plan.parallel.mode = ParallelMode::SingleDevice;
+        plan.parallel.transport = TransportKind::None;
+    } else {
+        plan.parallel.mode = ParallelMode::LayerPipeline;
+        plan.parallel.transport = TransportKind::Unresolved;
+        plan.parallel.topology_probe_required = true;
+    }
+    plan.parallel.schedule = PipelineSchedule::Sequential;
+    plan.checkpoint.exact_resume_requested =
+        !request.parent.resume_from_checkpoint.empty();
+    plan.checkpoint.purpose = plan.checkpoint.exact_resume_requested
+        ? CheckpointPurpose::ExactResume
+        : CheckpointPurpose::ModelExport;
+    plan.receipt_schema = "canopy-foundry-execution-receipt.v1";
     plan.precision.profile = request.precision_profile;
     plan.precision.gradients = request.gradient_buffer_precision;
     plan.precision.accumulators = request.gemm_accumulator_precision;
     plan.precision.optimizer_state = request.optimizer_state_precision;
     plan.precision.normalization = "legacy_request_default";
+    plan.precision.gradient_format = numeric_format_from_name(
+        request.gradient_buffer_precision);
+    plan.precision.accumulator_format = numeric_format_from_name(
+        request.gemm_accumulator_precision);
+    plan.precision.optimizer_state_format = numeric_format_from_name(
+        request.optimizer_state_precision);
     plan.optimizer.type = request.optimizer_type;
     plan.optimizer.state_precision = request.optimizer_state_precision;
     plan.attention_backend = request.attention_backend.empty()
@@ -388,11 +557,29 @@ PlanResolution resolve_execution_plan(
             plan.precision.master_storage = "bf16";
             plan.precision.forward_execution = "bf16";
             plan.precision.backward_dx_execution = "bf16";
+            plan.precision.master_format = NumericFormat::BF16;
+            plan.precision.forward_format = NumericFormat::BF16;
+            plan.precision.backward_dx_format = NumericFormat::BF16;
         } else if (request.precision_profile == "legacy_fp8" ||
                    request.precision_profile == "ampere_fp8_packed") {
-            plan.precision.master_storage = "unspecified_legacy";
+            // Foundry's current FP8 paths retain BF16 masters. The Ampere
+            // path specifically uses an E4M3 storage cache plus BF16 staging;
+            // the explicit role records the packed representation without
+            // claiming native FP8 Tensor Core execution.
+            plan.precision.master_storage = "bf16";
             plan.precision.forward_execution = request.precision_profile;
             plan.precision.backward_dx_execution = request.precision_profile;
+            plan.precision.master_format = NumericFormat::BF16;
+            plan.precision.packed_view_format = NumericFormat::FP8E4M3;
+            if (request.precision_profile == "ampere_fp8_packed") {
+                // The current Ampere adapter dequantizes the storage view into
+                // BF16 staging before the existing cuBLAS GEMM consumes it.
+                plan.precision.forward_format = NumericFormat::BF16;
+                plan.precision.backward_dx_format = NumericFormat::BF16;
+            } else {
+                plan.precision.forward_format = NumericFormat::FP8E4M3;
+                plan.precision.backward_dx_format = NumericFormat::FP8E4M3;
+            }
             const auto state = require("precision.fp8");
             if (state == CapabilityState::RuntimeUnverified) {
                 plan.runtime_verification_required = true;
@@ -401,6 +588,7 @@ PlanResolution resolve_execution_plan(
             reject("precision profile is not admitted by planner foundation: " +
                    request.precision_profile);
         }
+        plan.precision.normalization_format = NumericFormat::BF16;
     } else if (request.device.runtime == "cpu") {
         if (request.precision_profile != "fp32" &&
             request.precision_profile != "cpu_fp32") {
@@ -409,6 +597,10 @@ PlanResolution resolve_execution_plan(
         plan.precision.master_storage = "f32";
         plan.precision.forward_execution = "f32";
         plan.precision.backward_dx_execution = "f32";
+        plan.precision.master_format = NumericFormat::F32;
+        plan.precision.forward_format = NumericFormat::F32;
+        plan.precision.backward_dx_format = NumericFormat::F32;
+        plan.precision.normalization_format = NumericFormat::F32;
     } else if (request.device.runtime == "opencl") {
         if (request.precision_profile != "fp32" &&
             request.precision_profile != "opencl_fp32") {
@@ -417,6 +609,22 @@ PlanResolution resolve_execution_plan(
         plan.precision.master_storage = "f32";
         plan.precision.forward_execution = "f32";
         plan.precision.backward_dx_execution = "f32";
+        plan.precision.master_format = NumericFormat::F32;
+        plan.precision.forward_format = NumericFormat::F32;
+        plan.precision.backward_dx_format = NumericFormat::F32;
+        plan.precision.normalization_format = NumericFormat::F32;
+    }
+
+    MemoryInputs memory_inputs{};
+    if (shape_memory_bytes(request, plan.precision, memory_inputs)) {
+        plan.memory = make_memory_plan(memory_inputs);
+    } else {
+        plan.memory.rejection = "shape-based memory estimate overflowed";
+    }
+    if (!plan.memory.estimate_valid) {
+        reject(plan.memory.rejection.empty()
+            ? "memory plan is invalid"
+            : plan.memory.rejection);
     }
 
     if (plan.device.devices.empty()) {
@@ -424,7 +632,9 @@ PlanResolution resolve_execution_plan(
         plan.device.transport = "none";
     } else {
         plan.device.parallel_mode = "layer_pipeline";
-        plan.device.transport = request.device.peer_transport;
+        const auto requested_transport = request.device.peer_transport.empty()
+            ? std::string{"auto"} : request.device.peer_transport;
+        plan.device.transport = requested_transport;
         if (plan.device.devices.size() != 2) {
             reject("layer pipeline requires exactly two distinct devices");
         } else if (plan.device.devices[0] == plan.device.devices[1]) {
@@ -433,17 +643,19 @@ PlanResolution resolve_execution_plan(
         if (request.device.runtime != "cuda") {
             reject("layer pipeline is currently admitted only for CUDA");
         }
-        if (request.device.peer_transport != "auto" &&
-            request.device.peer_transport != "cuda_p2p" &&
-            request.device.peer_transport != "host_staged") {
+        if (requested_transport != "auto" &&
+            requested_transport != "cuda_p2p" &&
+            requested_transport != "host_staged") {
             reject("peer transport must be auto, cuda_p2p, or host_staged");
         }
-        if (request.device.peer_transport == "cuda_p2p") {
+        if (requested_transport == "cuda_p2p") {
+            plan.parallel.transport = TransportKind::CudaP2P;
             const auto state = require("parallel.cuda_p2p");
             if (state == CapabilityState::RuntimeUnverified) {
                 plan.runtime_verification_required = true;
             }
-        } else if (request.device.peer_transport == "host_staged") {
+        } else if (requested_transport == "host_staged") {
+            plan.parallel.transport = TransportKind::HostStaged;
             require("parallel.host_staged");
         } else {
             // AUTO is a planner choice only after topology probing. It is
@@ -452,6 +664,11 @@ PlanResolution resolve_execution_plan(
             require("parallel.cuda_p2p");
             plan.runtime_verification_required = true;
         }
+        plan.parallel.runtime_verified = false;
+    }
+
+    if (plan.checkpoint.exact_resume_requested) {
+        plan.runtime_verification_required = true;
     }
 
     if (request.device.runtime == "cpu" || request.device.runtime == "opencl") {

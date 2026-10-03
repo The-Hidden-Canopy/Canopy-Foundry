@@ -42,6 +42,12 @@ option(IDA_NATIVE_ENABLE_PRIVATE_OBSERVABILITY
 option(CANOPY_FOUNDRY_PUBLIC_BUILD
   "Build the public/local runtime surface"
   ON)
+option(CANOPY_FOUNDRY_BUILD_SHELL
+  "Build the native Windows/Linux local inspection shell"
+  ON)
+option(CANOPY_FOUNDRY_ENABLE_X11_SHELL
+  "Use the X11 native backend when building on Linux"
+  ON)
 if(CANOPY_FOUNDRY_PUBLIC_BUILD AND IDA_NATIVE_ENABLE_PRIVATE_OBSERVABILITY)
   message(FATAL_ERROR
     "Public Canopy Foundry builds cannot enable private observability; "
@@ -114,6 +120,16 @@ add_executable(ida_native_train
   src/status.cpp
   src/arena.cu
   src/execution/plan.cpp
+  src/execution/capability.cpp
+  src/execution/receipt.cpp
+  src/checkpoint/generation.cpp
+  src/memory/allocation_plan.cpp
+  src/optimizer/plan.cpp
+  src/parallel/plan.cpp
+  src/moe/route_plan.cpp
+  src/moe/scheduler.cpp
+  src/precision/execution_view.cpp
+  src/train/forward_tape.cpp
   src/trainer.cu
   src/checkpoint.cpp
   src/telemetry.cpp
@@ -316,6 +332,13 @@ endif()
 add_executable(foundry_plan
   tools/foundry_plan.cpp
   src/execution/plan.cpp
+  src/execution/capability.cpp
+  src/execution/receipt.cpp
+  src/checkpoint/generation.cpp
+  src/memory/allocation_plan.cpp
+  src/optimizer/plan.cpp
+  src/parallel/plan.cpp
+  src/precision/execution_view.cpp
   src/request.cpp
 )
 target_include_directories(foundry_plan PRIVATE
@@ -333,6 +356,13 @@ set_target_properties(foundry_plan PROPERTIES OUTPUT_NAME "foundry")
 add_executable(foundry_execution_plan_test
   tests/execution/execution_plan_test.cpp
   src/execution/plan.cpp
+  src/execution/capability.cpp
+  src/execution/receipt.cpp
+  src/checkpoint/generation.cpp
+  src/memory/allocation_plan.cpp
+  src/optimizer/plan.cpp
+  src/parallel/plan.cpp
+  src/precision/execution_view.cpp
   src/request.cpp
 )
 target_include_directories(foundry_execution_plan_test PRIVATE
@@ -346,6 +376,101 @@ target_compile_definitions(foundry_execution_plan_test PRIVATE
 )
 target_link_libraries(foundry_execution_plan_test PRIVATE nlohmann_json::nlohmann_json)
 add_test(NAME foundry_execution_plan COMMAND foundry_execution_plan_test)
+
+add_executable(foundry_execution_view_test
+  tests/execution/execution_view_test.cpp
+  src/precision/execution_view.cpp
+)
+target_include_directories(foundry_execution_view_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME foundry_execution_view COMMAND foundry_execution_view_test)
+
+add_executable(foundry_route_plan_test
+  tests/execution/route_plan_test.cpp
+  src/moe/route_plan.cpp
+)
+target_include_directories(foundry_route_plan_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME foundry_route_plan COMMAND foundry_route_plan_test)
+
+add_executable(foundry_scheduler_workspace_test
+  tests/execution/scheduler_workspace_test.cpp
+  src/moe/scheduler.cpp
+  src/moe/route_plan.cpp
+)
+target_include_directories(foundry_scheduler_workspace_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME foundry_scheduler_workspace COMMAND foundry_scheduler_workspace_test)
+
+add_executable(foundry_forward_tape_test
+  tests/execution/forward_tape_test.cpp
+  src/train/forward_tape.cpp
+  src/moe/route_plan.cpp
+)
+target_include_directories(foundry_forward_tape_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME foundry_forward_tape COMMAND foundry_forward_tape_test)
+
+add_executable(foundry_memory_plan_test
+  tests/execution/memory_plan_test.cpp
+  src/memory/allocation_plan.cpp
+)
+target_include_directories(foundry_memory_plan_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME foundry_memory_plan COMMAND foundry_memory_plan_test)
+
+add_executable(foundry_parallel_plan_test
+  tests/execution/parallel_plan_test.cpp
+  src/parallel/plan.cpp
+)
+target_include_directories(foundry_parallel_plan_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME foundry_parallel_plan COMMAND foundry_parallel_plan_test)
+
+add_executable(foundry_checkpoint_generation_test
+  tests/execution/checkpoint_generation_test.cpp
+  src/checkpoint/generation.cpp
+)
+target_include_directories(foundry_checkpoint_generation_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME foundry_checkpoint_generation COMMAND foundry_checkpoint_generation_test)
+
+add_executable(foundry_execution_receipt_test
+  tests/execution/execution_receipt_test.cpp
+  src/execution/receipt.cpp
+  src/execution/capability.cpp
+)
+target_include_directories(foundry_execution_receipt_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/include-public
+)
+target_compile_definitions(foundry_execution_receipt_test PRIVATE
+  CANOPY_FOUNDRY_BUILD_CUDA=1
+  CANOPY_FOUNDRY_BUILD_OPENCL=0
+  CANOPY_FOUNDRY_BUILD_CPU=1
+)
+target_link_libraries(foundry_execution_receipt_test PRIVATE nlohmann_json::nlohmann_json)
+add_test(NAME foundry_execution_receipt COMMAND foundry_execution_receipt_test)
+
+add_executable(foundry_optimizer_plan_test
+  tests/execution/optimizer_plan_test.cpp
+  src/optimizer/plan.cpp
+)
+target_include_directories(foundry_optimizer_plan_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME foundry_optimizer_plan COMMAND foundry_optimizer_plan_test)
+
+if(CANOPY_FOUNDRY_BUILD_SHELL)
+  add_subdirectory(shell)
+endif()
 
 if(NOT IDA_NATIVE_CUDA_FOUND AND NOT IDA_NATIVE_ENABLE_AMD)
   message(FATAL_ERROR
