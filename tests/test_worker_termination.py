@@ -124,6 +124,7 @@ class WindowsTerminationTests(unittest.TestCase):
             receipt = Mock()
             receipt.claim.return_value = {"decision": "claimed"}
             client = Mock()
+            client.get_worker_run.return_value = {"run": {"status": "running"}, "cancel_requested": False}
             job = {"run_id": "nf-reader123456", "worker_manifest": {"policy": {"timeout_seconds": 60}}}
             config = SimpleNamespace(run_root=out, max_output_bytes=100000, max_output_files=10)
             with patch.object(worker, "LocalRunReceiptStore", return_value=receipt), \
