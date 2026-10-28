@@ -690,6 +690,19 @@ std::string execution_plan_sha256(const ExecutionPlan& plan) {
     return sha256_hex(canonical_plan_json(plan));
 }
 
+std::string execution_plan_binding_error(
+    const ida_native::NativeRequest& request,
+    const PlanResolution& resolution
+) {
+    if (!resolution.plan.accepted) return "execution plan was not accepted";
+    const auto current = resolve_execution_plan(request, resolution.capabilities);
+    if (!current.plan.accepted) return "execution request no longer resolves: " + current.plan.rejection;
+    if (execution_plan_sha256(current.plan) != execution_plan_sha256(resolution.plan)) {
+        return "execution plan does not match the validated request";
+    }
+    return {};
+}
+
 std::string plan_json(const ExecutionPlan& plan, bool pretty) {
     auto value = plan_json_value(plan);
     value["execution_plan_sha256"] = sha256_hex(value.dump());

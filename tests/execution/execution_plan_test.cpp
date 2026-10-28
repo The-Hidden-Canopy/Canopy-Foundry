@@ -41,6 +41,17 @@ int main() {
     const auto resolution = resolve_execution_plan(baseline_request(), capabilities);
     const auto& plan = resolution.plan;
 
+    if (!require(execution_plan_binding_error(baseline_request(), resolution).empty(),
+                 "matching request was rejected at backend plan binding")) return 1;
+    auto changed_request = baseline_request();
+    changed_request.model.hidden_size += 64;
+    if (!require(!execution_plan_binding_error(changed_request, resolution).empty(),
+                 "backend accepted a plan bound to a different request")) return 1;
+    auto changed_resolution = resolution;
+    changed_resolution.plan.precision.forward_execution = "unsupported_native_mxfp8";
+    if (!require(!execution_plan_binding_error(baseline_request(), changed_resolution).empty(),
+                 "backend accepted a tampered execution plan")) return 1;
+
     if (!require(plan.accepted, "baseline CUDA request was rejected")) return 1;
     if (!require(plan.runtime_verification_required,
                  "baseline plan did not retain runtime verification")) return 1;

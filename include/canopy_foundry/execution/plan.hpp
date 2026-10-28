@@ -104,5 +104,11 @@ std::string capabilities_json(
 );
 std::string execution_plan_sha256(const ExecutionPlan& plan);
 std::string sha256_hex(std::string_view value);
+// Re-resolve immediately before execution so the backend cannot run a plan
+// admitted for a different request or capability snapshot.
+std::string execution_plan_binding_error(
+    const ida_native::NativeRequest& request,
+    const PlanResolution& resolution
+);
 
 }  // namespace canopy_foundry
