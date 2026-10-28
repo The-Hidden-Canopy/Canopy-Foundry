@@ -287,6 +287,17 @@ class WorkerError(RuntimeError):
     """A local worker request or execution failed without exposing local paths."""
 
 
+class TerminationUncertain(WorkerError):
+    """The owned child tree has not been verified stopped; do not publish a terminal receipt."""
+
+
+def unverified_windows_cancellation() -> None:
+    if os.name == "nt":
+        raise TerminationUncertain(
+            "Windows child-tree termination is unverified; retain the run for operator reconciliation"
+        )
+
+
 MAX_HUB_RESPONSE_BYTES = 1024 * 1024
 MAX_NATIVE_STDOUT_BYTES = 8 * 1024 * 1024
 MAX_NATIVE_STDERR_BYTES = 8 * 1024 * 1024
@@ -403,12 +414,29 @@ def bounded_event(value: Any) -> dict[str, Any]:
 
 
 def public_event(value: Any) -> dict[str, Any]:
-    """Project native output before it crosses the machine boundary."""
+    """Project only known event labels and correctly typed numeric fields."""
     result = bounded_event(value)
     result.pop("message", None)
-    for key in ("type", "status"):
-        if key in result and not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", str(result[key])):
-            result.pop(key)
+    event_types = {
+        "step", "complete", "native_event", "worker_error", "worker_started",
+        "worker_replay", "worker_replay_busy", "process_exit",
+        "worker_cancelled_before_launch", "self_check",
+    }
+    statuses = {"queued", "running", "cancel_requested", "cancelled", "failed", "succeeded", "complete", "passed"}
+    if not isinstance(result.get("type"), str) or result["type"] not in event_types:
+        result.pop("type", None)
+    if not isinstance(result.get("status"), str) or result["status"] not in statuses:
+        result.pop("status", None)
+    for key in ("step", "micro_step", "exit_code"):
+        item = result.get(key)
+        if isinstance(item, bool) or not isinstance(item, int):
+            result.pop(key, None)
+    for key in ("loss", "learning_rate", "tokens_per_second", "grad_norm"):
+        item = result.get(key)
+        if isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(item):
+            result.pop(key, None)
+    if not isinstance(result.get("checkpoint_written"), bool):
+        result.pop("checkpoint_written", None)
     if "type" not in result and "status" not in result:
         result["type"] = "native_event"
     return result
@@ -1874,19 +1902,24 @@ def optional_leaderboard_attestation(job: dict[str, Any], config: WorkerConfig) 
 
 def terminate_process_tree(process: subprocess.Popen[str]) -> None:
     if os.name == "nt":
+        # Popen retains the OS handle to this exact child. Do not invoke
+        # taskkill by PID: that number can be recycled after the child exits.
+        # Root termination cannot establish that descendants are gone, so
+        # every uncontained Windows outcome remains unknown.
         try:
-            system_root = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
-            taskkill = str(Path(system_root) / "System32" / "taskkill.exe")
-            subprocess.run(
-                [taskkill, "/PID", str(process.pid), "/T", "/F"],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-                env=sanitized_environment(),
-            )
+            running = process.poll() is None
         except (OSError, subprocess.SubprocessError):
-            process.kill()
+            running = False
+        if running:
+            try:
+                process.kill()
+            except (OSError, subprocess.SubprocessError):
+                pass
+            try:
+                process.wait(timeout=3)
+            except (OSError, subprocess.SubprocessError):
+                pass
+        unverified_windows_cancellation()
         return
     try:
         import signal
@@ -1937,6 +1970,10 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
         )
         return
     if receipt["decision"] == "busy":
+        state = client.get_worker_run(run_id)
+        hub_status = state["run"]["status"]
+        if state["cancel_requested"] or hub_status in {"cancel_requested", *TERMINAL_RUN_STATUSES}:
+            raise WorkerError("local in-progress run requires operator reconciliation with the controller")
         client.update(
             run_id,
             status="running",
@@ -2102,6 +2139,12 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
         for reader in readers:
             reader.join(timeout=10)
     except OSError:
+        if process is not None and os.name == "nt":
+            # Failure after launch does not prove that the owned tree stopped.
+            # Attempt only handle-based root termination, then keep the run
+            # pending for reconciliation rather than publishing a false receipt.
+            terminate_process_tree(process)
+            unverified_windows_cancellation()
         publish_terminal_update(
             client, receipt_store, run_id, receipt_identity,
             status="failed", metrics_available=False,
@@ -2126,6 +2169,7 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
         pass
     checkpoint_written = (output_path / "model.safetensors").is_file()
     if cancel_requested:
+        unverified_windows_cancellation()
         publish_terminal_update(
             client,
             receipt_store,
@@ -2142,6 +2186,8 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
         )
         return
     if hub_terminal_status is not None:
+        if hub_terminal_status == "cancelled":
+            unverified_windows_cancellation()
         complete_local_receipt(
             receipt_store,
             run_id,
@@ -2214,6 +2260,8 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
                     break
                 raise
             event_count += 1
+    if cancel_requested or hub_terminal_status == "cancelled":
+        unverified_windows_cancellation()
     metrics_available = completed_metrics(
         output_path,
         run_id=run_id,
@@ -2258,9 +2306,12 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
     if hub_state is not None:
         hub_status = hub_state["run"]["status"]
         if hub_state["cancel_requested"] or hub_status == "cancel_requested":
+            unverified_windows_cancellation()
             final_status = "cancelled"
             metrics_available = False
         elif hub_status in TERMINAL_RUN_STATUSES:
+            if hub_status == "cancelled":
+                unverified_windows_cancellation()
             complete_local_receipt(
                 receipt_store,
                 run_id,
@@ -2309,6 +2360,8 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
             },
         )
         final_status, hub_terminal = wait_for_hub_evaluation(job, config, client)
+        if final_status == "cancelled":
+            unverified_windows_cancellation()
         if hub_terminal:
             complete_local_receipt(
                 receipt_store,

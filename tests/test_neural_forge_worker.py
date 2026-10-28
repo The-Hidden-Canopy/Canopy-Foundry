@@ -1073,8 +1073,16 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
                 if isinstance(receipt, dict):
                     self.execution_receipts.append(receipt)
 
+        import subprocess
+        opened_children = []
+        original_popen = subprocess.Popen
+        def tracked_popen(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            opened_children.append(child)
+            return child
+
         client = FakeClient()
-        with patch(
+        with patch("scripts.neural_forge_worker.subprocess.Popen", side_effect=tracked_popen), patch(
             "scripts.neural_forge_worker.build_command",
             return_value=([sys.executable, "-c", child_code, str(output)], output),
         ), patch(
@@ -1084,6 +1092,11 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
             }),
         ), patch("scripts.neural_forge_worker.time.sleep"):
             execute_job(job, replace(self.config, poll_seconds=0.05), client)  # type: ignore[arg-type]
+
+        self.assertTrue(opened_children)
+        for child in opened_children:
+            self.assertTrue(child.stdout.closed, "completed worker retained its stdout pipe")
+            self.assertTrue(child.stderr.closed, "completed worker retained its stderr pipe")
 
         self.assertEqual(client.updates[0][0], "running")
         self.assertEqual(client.updates[-1][0], "succeeded")
@@ -1147,11 +1160,19 @@ class NeuralForgeWorkerBoundaryTests(unittest.TestCase):
             "scripts.neural_forge_worker.manifest_local_request",
             return_value=({}, Path(), Path(), {"execution": {"backend": "cuda"}}),
         ), patch("scripts.neural_forge_worker.time.sleep"):
-            execute_job(job, replace(self.config, poll_seconds=0.05), client)  # type: ignore[arg-type]
+            if os.name == "nt":
+                with self.assertRaisesRegex(WorkerError, "child-tree termination is unverified"):
+                    execute_job(job, replace(self.config, poll_seconds=0.05), client)  # type: ignore[arg-type]
+            else:
+                execute_job(job, replace(self.config, poll_seconds=0.05), client)  # type: ignore[arg-type]
 
-        self.assertEqual(client.updates[-1], "cancelled")
         receipt = json.loads((self.config.run_root / ".receipts" / f"{run_id}.json").read_text())
-        self.assertEqual(receipt["status"], "cancelled")
+        if os.name == "nt":
+            self.assertNotIn("cancelled", client.updates)
+            self.assertEqual(receipt["status"], "in_progress")
+        else:
+            self.assertEqual(client.updates[-1], "cancelled")
+            self.assertEqual(receipt["status"], "cancelled")
 
     def test_hub_update_carries_only_sanitized_leaderboard_attestation(self) -> None:
         client = object.__new__(HubClient)
