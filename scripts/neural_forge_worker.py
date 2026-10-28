@@ -2138,6 +2138,13 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
             process.wait(timeout=10)
         for reader in readers:
             reader.join(timeout=10)
+        if any(reader.is_alive() for reader in readers):
+            # A timed-out join cannot prove that all output was captured.
+            # Retain the in-progress receipt for reconciliation.
+            raise TerminationUncertain("native output readers did not finish; reconciliation required")
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
     except OSError:
         if process is not None and os.name == "nt":
             # Failure after launch does not prove that the owned tree stopped.
