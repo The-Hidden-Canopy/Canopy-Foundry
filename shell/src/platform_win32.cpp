@@ -1,9 +1,11 @@
 #ifdef _WIN32
 
 #include "canopy_foundry/shell/platform.hpp"
+#include "canopy_foundry/shell/guide.hpp"
 
 #include <windows.h>
 #include <commdlg.h>
+#include <shellapi.h>
 
 #include <algorithm>
 #include <string>
@@ -31,6 +33,14 @@ std::wstring wide(const std::string& value) {
         CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
         result.data(), required);
     return result;
+}
+
+void open_guide_document(GuideDocument document) {
+    const auto path = guide_document_path(g_state->frontend_root, document);
+    if (path.empty()) { g_state->status = "Local guide not found. Check the Foundry installation."; return; }
+    const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+    g_state->status = result > 32 ? "Opening local guide in the default application."
+                                  : "Could not open local guide. Check file association.";
 }
 
 COLORREF color(int red, int green, int blue) {
@@ -138,6 +148,7 @@ void draw_sprite(
 }
 
 void draw_ida_card(HDC dc, int left, int top, int right, int bottom) {
+    if (!g_state->companion_visible) return;
     const int pulse = 40 + ((static_cast<int>(g_state->animation_tick % 8) * 7));
     panel(dc, left, top, right, bottom, color(16, 30, 42), color(40, 105, 103));
     draw_text(dc, "IDA CLI / LOCAL PRESENCE", left + 16, top + 14, right - left - 32, 18,
@@ -251,6 +262,9 @@ void draw_nav(HDC dc, int height) {
               g_state->view == View::Simulation);
     draw_text(dc, "S", 166, 436, 23, 16, 8, color(82, 96, 113), false, DT_RIGHT);
 
+    button(dc, g_state->mode == WorkspaceMode::Ida ? "Train Brain" : "Back to IDA", 22, 480, 155);
+    draw_text(dc, g_state->companion_visible ? "Hide IDA" : "Show IDA", 38, 531, 112, 18, 10, color(116, 130, 148));
+    draw_text(dc, "Help / Guide  H", 38, 570, 145, 18, 10, color(116, 130, 148));
     line(dc, 22, height - 109, kLeftWidth - 22, height - 109, color(30, 42, 56));
     draw_text(dc, "STANDALONE SURFACE", 22, height - 89, 160, 16, 9, color(85, 213, 197), true);
     draw_text(dc, "Local contracts only.", 22, height - 65, 155, 18, 10, color(116, 130, 148));
@@ -277,7 +291,7 @@ void draw_overview(HDC dc, int left, int right, int height) {
               left, 265, 410, 68, 13, color(185, 197, 209), false, DT_WORDBREAK);
     draw_ida_card(dc, right - 224, 132, right, 340);
     button(dc, "Load local JSON", left, 352, 145, true);
-    button(dc, "Plan lens", left + 157, 352, 110);
+    button(dc, "Train Brain", left + 157, 352, 110);
     button(dc, "Run simulation", left + 279, 352, 128);
     draw_text(dc, g_state->status, left, 408, 530, 40, 10, color(116, 130, 148), false, DT_WORDBREAK);
 
@@ -293,15 +307,17 @@ void draw_overview(HDC dc, int left, int right, int height) {
 }
 
 void draw_plan(HDC dc, int left, int right) {
-    draw_text(dc, "CANOPY FOUNDRY / PLAN LENS", left, 92, right - left, 18, 9, color(116, 130, 148), true);
+    draw_text(dc, g_state->mode == WorkspaceMode::TrainBrain ? "WEAVE / BRAIN TRAINING" : "CANOPY FOUNDRY / PLAN LENS", left, 92, right - left, 18, 9, color(116, 130, 148), true);
     draw_text(dc, "Plan lens", left, 122, 500, 48, 36, color(231, 237, 243), false);
     draw_text(dc, "DISPLAYED CONTRACT IS NOT PROOF OF EXECUTION", left + 230, 140, 300, 18, 9, color(240, 174, 104), true);
     const int column = std::max(270, (right - left - 30) / 3);
     const int top = 204;
     for (int index = 0; index < 3; ++index) {
         panel(dc, left + index * (column + 15), top, left + index * (column + 15) + column, 560,
-              index == 1 ? color(20, 45, 48) : color(20, 28, 39),
-              index == 1 ? color(40, 105, 103) : color(30, 42, 56));
+              index == 1 ? (g_state->mode == WorkspaceMode::TrainBrain
+                  ? color(48, 34, 33) : color(20, 45, 48)) : color(20, 28, 39),
+              index == 1 ? (g_state->mode == WorkspaceMode::TrainBrain
+                  ? color(147, 88, 65) : color(40, 105, 103)) : color(30, 42, 56));
     }
     draw_text(dc, "INPUT DOCUMENT", left + 18, top + 18, column - 36, 16, 9, color(116, 130, 148), true);
     draw_text(dc, g_state->document.loaded ? g_state->document.name : "No local JSON loaded",
@@ -315,13 +331,14 @@ void draw_plan(HDC dc, int left, int right) {
     });
 
     const int middle = left + column + 15;
-    draw_text(dc, "RESOLVED SHAPE", middle + 18, top + 18, column - 36, 16, 9, color(85, 213, 197), true);
+    draw_text(dc, "RESOLVED SHAPE", middle + 18, top + 18, column - 36, 16, 9,
+              g_state->mode == WorkspaceMode::TrainBrain ? color(240, 174, 104) : color(85, 213, 197), true);
     draw_text(dc, "ExecutionPlan", middle + 18, top + 45, column - 36, 24, 17, color(231, 237, 243), true);
     draw_facts(dc, middle + 18, top + 92, column - 36, {
-        {"PLANNER", g_state->document.planner_revision},
-        {"PARALLEL", g_state->document.parallel_mode},
-        {"TRANSPORT", g_state->document.transport},
-        {"OWNER", "native planner"},
+        {"PLANNER", g_state->plan.planner_revision},
+        {"PARALLEL", g_state->plan.parallel_mode},
+        {"TRANSPORT", g_state->plan.transport},
+        {"PLAN", g_state->plan.resolved ? (g_state->plan.accepted ? "accepted" : "rejected") : "not resolved"},
         {"RUNTIME", "verify separately"},
     });
 
@@ -329,12 +346,23 @@ void draw_plan(HDC dc, int left, int right) {
     draw_text(dc, "PRECISION ROLES", last + 18, top + 18, column - 36, 16, 9, color(116, 130, 148), true);
     draw_text(dc, "Representation map", last + 18, top + 45, column - 36, 24, 15, color(231, 237, 243), true);
     draw_facts(dc, last + 18, top + 92, column - 36, {
-        {"MASTER", "explicit role"},
-        {"FORWARD", "execution view"},
-        {"BACKWARD DX", "execution view"},
-        {"GRADIENTS", "separate"},
-        {"ACCUMULATORS", "separate"},
+        {"MASTER", g_state->plan.master},
+        {"FORWARD", g_state->plan.forward},
+        {"BACKWARD DX", g_state->plan.backward},
+        {"GRADIENTS", g_state->plan.gradients},
+        {"ACCUMULATORS", g_state->plan.accumulators},
+        {"OPTIMIZER", g_state->plan.optimizer_state},
     });
+    button(dc, "Resolve selected request", left, 580, 180, true);
+    button(dc, "Inspect resume", left, 628, 180);
+    button(dc, "Refresh status", left + 195, 628, 145);
+    draw_text(dc, g_state->status, left + 195, 584, right - left - 195, 76, 10,
+              color(185, 197, 209), false, DT_WORDBREAK);
+    button(dc, "Check Run", left, 676, 105);
+    button(dc, "Run", left + 117, 676, 90);
+    button(dc, "Cancel", left + 219, 676, 90);
+    draw_text(dc, "Local execution unavailable; open Help for options.",
+              left + 322, 686, right - left - 322, 30, 10, color(240, 174, 104), false, DT_WORDBREAK);
 }
 
 void draw_capabilities(HDC dc, int left, int right) {
@@ -512,6 +540,25 @@ void draw_simulation(HDC dc, int left, int right, int height) {
 void draw_center(HDC dc, int width, int height) {
     const int left = kLeftWidth + 45;
     const int right = width - kRightWidth - 28;
+    if (g_state->guide_visible) {
+        draw_text(dc, "WELCOME TO FOUNDRY", left, 102, right - left, 20, 10, color(85, 213, 197), true);
+        draw_text(dc, "Start with IDA. Choose Train Brain to open Weave.", left, 140, 460, 65, 22, color(231, 237, 243), false, DT_WORDBREAK);
+        draw_ida_card(dc, right - 224, 132, right, 340);
+        draw_text(dc,
+            "1. Check: foundry capabilities --pretty, nvidia-smi, and nvcc --version.\n\n"
+            "2. Try foundry plan configs/examples/planning_only_request.json --pretty. The fixture has no training data.\n\n"
+            "3. In Train Brain, resolve a request or use Check Run. Neither starts training. Checkpoint inspection is preliminary.\n\n"
+            "CUDA needs a supported GPU/toolkit; CPU/OpenCL training is disabled. Fix rejected requests and retry.",
+            left, 230, 460, 260, 12, color(185, 197, 209), false, DT_WORDBREAK);
+        button(dc, "1  Starter guide", left, 510, 145);
+        button(dc, "2  Worker guide", left + 155, 510, 145);
+        draw_text(dc, g_state->status, left, 635, right - left, 38, 10, color(116, 130, 148), false, DT_WORDBREAK);
+        draw_text(dc, g_state->view == View::Plan ? "Here: resolve the selected request or inspect its resume." : "Here: use Train Brain to open the planning workspace.",
+                  left, 552, right - left, 18, 10, color(240, 174, 104));
+        button(dc, "Continue", left, 580, 145, true);
+        draw_text(dc, "Reopen with H or Help / Guide", left + 160, 590, 260, 20, 10, color(116, 130, 148));
+        return;
+    }
     switch (g_state->view) {
         case View::Overview:
             draw_overview(dc, left, right, height);
@@ -596,6 +643,9 @@ void select_view(int y) {
     else if (y >= 244 && y < 279) g_state->view = View::Evidence;
     else if (y >= 343 && y < 378) g_state->view = View::Boundaries;
     else if (y >= 426 && y < 461) g_state->view = View::Simulation;
+    else if (y >= 480 && y < 518) switch_workspace_mode(*g_state,
+        g_state->mode == WorkspaceMode::Ida ? WorkspaceMode::TrainBrain : WorkspaceMode::Ida);
+    else if (y >= 525 && y < 552) g_state->companion_visible = !g_state->companion_visible;
 }
 
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l_param) {
@@ -616,15 +666,69 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
         case WM_LBUTTONUP: {
             const int x = static_cast<short>(LOWORD(l_param));
             const int y = static_cast<short>(HIWORD(l_param));
+            const int center_left = kLeftWidth + 45;
+            if (g_state->guide_visible) {
+                if (y >= 510 && y < 548 && x >= center_left && x < center_left + 145) open_guide_document(GuideDocument::Starter);
+                else if (y >= 510 && y < 548 && x >= center_left + 155 && x < center_left + 300) open_guide_document(GuideDocument::Foundry);
+                else if (x >= center_left && x < center_left + 145 && y >= 580 && y < 620) close_guide(*g_state);
+                InvalidateRect(window, nullptr, FALSE);
+                return 0;
+            }
+            if (x < kLeftWidth && y >= 562 && y < 595) {
+                g_state->guide_visible = true;
+                InvalidateRect(window, nullptr, FALSE);
+                return 0;
+            }
             if (x < kLeftWidth) {
                 select_view(y);
                 InvalidateRect(window, nullptr, FALSE);
                 return 0;
             }
-            const int center_left = kLeftWidth + 45;
             if ((g_state->view == View::Overview && x >= center_left && x < center_left + 145 && y >= 352 && y < 400) ||
                 (g_state->view == View::Plan && x >= center_left && x < center_left + 145 && y >= 204 && y < 255)) {
                 open_document(window);
+                return 0;
+            }
+            if (g_state->view == View::Plan && x >= center_left &&
+                x < center_left + 180 && y >= 580 && y < 620) {
+                resolve_selected_request(*g_state);
+                InvalidateRect(window, nullptr, FALSE);
+                return 0;
+            }
+            if (g_state->view == View::Plan && x >= center_left &&
+                x < center_left + 180 && y >= 628 && y < 668) {
+                inspect_selected_resume(*g_state);
+                InvalidateRect(window, nullptr, FALSE);
+                return 0;
+            }
+            if (g_state->view == View::Plan && x >= center_left + 195 &&
+                x < center_left + 340 && y >= 628 && y < 668) {
+                refresh_selected_run(*g_state);
+                InvalidateRect(window, nullptr, FALSE);
+                return 0;
+            }
+            if (g_state->view == View::Plan && y >= 676 && y < 716 &&
+                x >= center_left && x < center_left + 105) {
+                check_selected_run(*g_state);
+                InvalidateRect(window, nullptr, FALSE);
+                return 0;
+            }
+            if (g_state->view == View::Plan && y >= 676 && y < 716 &&
+                x >= center_left + 117 && x < center_left + 207) {
+                start_selected_run(*g_state);
+                InvalidateRect(window, nullptr, FALSE);
+                return 0;
+            }
+            if (g_state->view == View::Plan && y >= 676 && y < 716 &&
+                x >= center_left + 219 && x < center_left + 309) {
+                cancel_selected_run(*g_state);
+                InvalidateRect(window, nullptr, FALSE);
+                return 0;
+            }
+            if (g_state->view == View::Overview &&
+                x >= center_left + 157 && x < center_left + 267 && y >= 352 && y < 400) {
+                switch_workspace_mode(*g_state, WorkspaceMode::TrainBrain);
+                InvalidateRect(window, nullptr, FALSE);
                 return 0;
             }
             if (g_state->view == View::Overview &&
@@ -637,6 +741,21 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
             return 0;
         }
         case WM_KEYDOWN:
+            if (w_param == 'H') {
+                if (g_state->guide_visible) close_guide(*g_state);
+                else g_state->guide_visible = true;
+                InvalidateRect(window, nullptr, FALSE);
+                return 0;
+            }
+            if (g_state->guide_visible) {
+                if (w_param == '1' || w_param == '2') {
+                    open_guide_document(w_param == '1' ? GuideDocument::Starter : GuideDocument::Foundry);
+                    InvalidateRect(window, nullptr, FALSE);
+                    return 0;
+                }
+                if (w_param == VK_ESCAPE) { close_guide(*g_state); InvalidateRect(window, nullptr, FALSE); }
+                return 0;
+            }
             if (w_param == '1') g_state->view = View::Overview;
             else if (w_param == '2') g_state->view = View::Plan;
             else if (w_param == '3') g_state->view = View::Capabilities;

@@ -377,7 +377,12 @@ The worker may safely retry the exact same operation; the Hub returns the
 original projection without duplicating the event. Reusing an operation ID
 with a different body is rejected. The worker must poll for the controller's
 `cancel_requested` state and may then finalize `cancelled`; it cannot bypass
-the controller by submitting `cancelled` itself.
+the controller by submitting `cancelled` itself. On Windows, workers started without a verified
+owned process-tree container cannot confirm that descendants have stopped.
+They report an unknown termination outcome and retain the local in-progress
+receipt for operator reconciliation with the controller; they do not claim a
+completed cancellation. The local CLI and shell do not yet provide Run/Cancel.
+
 
 For an explicitly opted-in leaderboard run, the Hub claim projection includes
 only `leaderboard_requested`. After a successful run, the worker may query the
@@ -618,3 +623,40 @@ compatibility, and observed runtime output. The governed external wrapper owns
 who may run it, which organization and role the run belongs to, why it is
 allowed, how state changes are audited, and whether any result may be
 promoted.
+
+## Local plan and checkpoint inspection
+
+The native `foundry plan REQUEST.json` and `foundry validate REQUEST.json`
+commands and the shell's **Resolve
+selected request** action use the same planner service and build inventory.
+A resolved plan describes the request as read at that moment; it is not a
+hardware probe or proof of execution. Resolve again after editing the request.
+The shell clears its displayed plan when a different document is selected or
+when **Check Run** reloads the request, so an earlier plan is not presented as
+the result of that check. Check Run does not start training.
+The separate **Run**, **Refresh status**, and **Cancel** controls are currently
+unavailable; they have no connected local execution owner in this build. The
+CLI's `run`, `status`, and `cancel` commands share that same limitation.
+
+`foundry checkpoint DIRECTORY` checks only for the native model and optimizer
+file pair and bounded header prefixes. Exit code 3 indicates missing,
+unsupported or truncated input; exit code 4 means these limited checks passed
+but native format, lineage, generation, and runtime validation are still
+required. The shell's **Inspect resume** action performs the same check on
+the selected request's `resume_from_checkpoint`. Neither operation modifies
+checkpoint files or authorizes a resume.
+
+### Local and Hub-managed execution
+
+Foundry's existing native executable can be invoked by an operator locally as
+described in the starter guide. Local execution does not create a Hub job or
+make Hub authorization, evaluation, or promotion decisions. The local
+`foundry run` / `cancel` service and shell controls are not connected yet.
+
+The existing worker is a different, Hub-managed path: it claims a Hub-issued
+manifest, verifies local bindings and the attested native binary, and polls
+for controller cancellation. A local frontend must not impersonate that
+controller or invent a Hub job to obtain local execution. Both future front
+ends should reuse one native execution path and the same request, plan, receipt,
+and checkpoint contracts; local receipts remain local and are not Hub
+authorization or promotion evidence.

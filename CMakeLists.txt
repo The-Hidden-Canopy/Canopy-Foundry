@@ -329,8 +329,10 @@ if(TARGET ida_native_cpu_train)
   set(CANOPY_FOUNDRY_BUILD_CPU 1)
 endif()
 
-add_executable(foundry_plan
-  tools/foundry_plan.cpp
+add_library(foundry_execution_service STATIC
+  src/execution/service.cpp
+  src/execution/owner_pipe.cpp
+  src/execution/checkpoint_inspection.cpp
   src/execution/plan.cpp
   src/execution/capability.cpp
   src/execution/receipt.cpp
@@ -341,17 +343,26 @@ add_executable(foundry_plan
   src/precision/execution_view.cpp
   src/request.cpp
 )
-target_include_directories(foundry_plan PRIVATE
+target_include_directories(foundry_execution_service PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}/include-public
 )
-target_compile_definitions(foundry_plan PRIVATE
+target_compile_definitions(foundry_execution_service PRIVATE
   CANOPY_FOUNDRY_BUILD_CUDA=${CANOPY_FOUNDRY_BUILD_CUDA}
   CANOPY_FOUNDRY_BUILD_OPENCL=${CANOPY_FOUNDRY_BUILD_OPENCL}
   CANOPY_FOUNDRY_BUILD_CPU=${CANOPY_FOUNDRY_BUILD_CPU}
 )
-target_link_libraries(foundry_plan PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(foundry_execution_service PUBLIC nlohmann_json::nlohmann_json)
+if(WIN32)
+  target_link_libraries(foundry_execution_service PRIVATE advapi32 bcrypt)
+endif()
+add_executable(foundry_plan tools/foundry_plan.cpp)
+target_link_libraries(foundry_plan PRIVATE foundry_execution_service)
 set_target_properties(foundry_plan PROPERTIES OUTPUT_NAME "foundry")
+add_test(NAME foundry_cli_unavailable
+  COMMAND ${CMAKE_COMMAND} -DFOUNDRY=$<TARGET_FILE:foundry_plan>
+          -DFOUNDRY_EXAMPLE=${CMAKE_SOURCE_DIR}/configs/examples/planning_only_request.json
+          -P ${CMAKE_SOURCE_DIR}/tests/cli_unavailable_test.cmake)
 
 add_executable(foundry_execution_plan_test
   tests/execution/execution_plan_test.cpp

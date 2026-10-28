@@ -1,4 +1,5 @@
 #include "canopy_foundry/shell/model.hpp"
+#include "canopy_foundry/shell/guide.hpp"
 #include "canopy_foundry/shell/platform.hpp"
 
 #include <cstdlib>
@@ -19,9 +20,9 @@ using canopy_foundry::shell::ShellState;
 
 void print_usage() {
     std::cout
-        << "Usage: foundry_shell [--frontend-root DIR] [--document FILE] [--simulate]\n"
+        << "Usage: foundry_shell [--frontend-root DIR] [--document FILE] [--simulate] [--hide-ida]\n"
         << "       foundry_shell --check [--frontend-root DIR]\n"
-        << "       foundry_shell --headless [--frontend-root DIR] [--document FILE] [--simulate]\n";
+        << "       foundry_shell --headless [--frontend-root DIR] [--document FILE] [--simulate] [--hide-ida]\n";
 }
 
 std::filesystem::path default_frontend_root() {
@@ -65,6 +66,8 @@ std::filesystem::path default_frontend_root() {
 
 int run_command(const std::vector<std::string>& arguments) {
     ShellState state;
+    state.guide_state_directory = canopy_foundry::shell::default_guide_state_directory();
+    state.guide_visible = !canopy_foundry::shell::guide_seen(state.guide_state_directory);
     state.frontend_root = default_frontend_root();
     std::filesystem::path document_path;
     bool check_only = false;
@@ -83,6 +86,10 @@ int run_command(const std::vector<std::string>& arguments) {
         }
         if (argument == "--headless") {
             headless = true;
+            continue;
+        }
+        if (argument == "--hide-ida") {
+            state.companion_visible = false;
             continue;
         }
         if (argument == "--simulate") {
@@ -132,6 +139,8 @@ int run_command(const std::vector<std::string>& arguments) {
         std::cout << "frontend_root=" << state.frontend_root.string() << '\n'
                   << "frontend_present=" << (state.frontend_present ? "true" : "false")
                   << '\n'
+                  << "guide_visible=" << (state.guide_visible ? "true" : "false") << '\n'
+                  << "ida_companion_visible=" << (state.companion_visible ? "true" : "false") << '\n'
                   << "ida_sprite_present=" << (state.ida_sprite.loaded ? "true" : "false")
                   << '\n'
                   << "ida_sprite_frames=" << state.ida_sprite.frames.size() << '\n'
@@ -146,6 +155,8 @@ int run_command(const std::vector<std::string>& arguments) {
                   << "status=" << state.status << '\n'
                   << "frontend_present=" << (state.frontend_present ? "true" : "false")
                   << '\n'
+                  << "guide_visible=" << (state.guide_visible ? "true" : "false") << '\n'
+                  << "ida_companion_visible=" << (state.companion_visible ? "true" : "false") << '\n'
                   << "ida_sprite_present=" << (state.ida_sprite.loaded ? "true" : "false")
                   << '\n'
                   << "simulation_stage="

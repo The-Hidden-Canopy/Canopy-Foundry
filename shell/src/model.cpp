@@ -173,6 +173,7 @@ bool load_document(
             : "REQUEST PREVIEW";
 
     state.document = std::move(summary);
+    state.plan = {};
     state.status = "Loaded locally: " + state.document.name +
         ". No upload or runtime claim was made.";
     return true;

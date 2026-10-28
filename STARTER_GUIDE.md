@@ -7,6 +7,47 @@ This guide builds and invokes the native runtime directly. The former
 loopback adapter in `api/native_api.py` is retired; the governed wrapper still
 owns authority, execution, audit, and promotion.
 
+## Getting started in Foundry
+
+Foundry opens with IDA. Choose **Train Brain** to switch to the Weave planning
+workspace, and **Back to IDA** to return. **Help / Guide** (or `H`) reopens
+the startup guide. The guide preference is local and does not affect a selected
+request or a run.
+
+After building the native `foundry` command, use `foundry --help` and
+`foundry capabilities --pretty`. Check the actual device with `nvidia-smi` and
+check the toolkit with `nvcc --version`. A capability inventory alone does
+not prove that this device can run training. CUDA requires a supported GPU,
+toolkit, and matching architecture; CPU and OpenCL training profiles are
+disabled.
+
+`foundry plan configs/examples/planning_only_request.json --pretty` exercises a
+one-step request shape. Planning reads this file and does not create its placeholder
+output paths or start a run. The example has no training dataset and is for planning
+only; replace its paths and provide real inputs before any native execution. Run
+the example command from the repository root, or from the installed
+`share/canopy-foundry` directory. If it is rejected, inspect the error, correct the request or prerequisites,
+and try again. In the shell, select your local JSON and choose **Resolve
+selected request** to use the same planner. A plan is not a runtime receipt.
+
+For checkpoint inspection use `foundry checkpoint DIRECTORY` or the shell's
+**Inspect resume** after selecting a request with `resume_from_checkpoint`.
+These check only file-pair presence and bounded header prefixes; the native
+loader must still validate format, lineage, generation, and compatibility.
+The shell's **Check Run** reports request, plan or checkpoint problems without
+starting a run. The separate **Run**, **Refresh status**, and **Cancel** controls,
+and the CLI's `foundry run REQUEST.json`, `foundry status RUN-ID`, and
+`foundry cancel RUN-ID`, report that the local service is unavailable. They
+cannot start or cancel a run in this build and do not control a Hub-managed job.
+Local execution is not yet connected. The direct
+native invocation below is a separate local path; it does not require a Hub
+job, and it does not provide the new shell's run/cancel service. The existing
+Hub-controlled worker requires an attested binary, local bindings, and a
+Hub-issued job. A build inventory or CPU smoke executable does not make
+training available.
+See the [local guide](docs/neural-foundry-guide.md) for the native training
+contract and [portability notes](PORTABILITY.md) for backend limits.
+
 ## 1. Build
 
 From the repository root:

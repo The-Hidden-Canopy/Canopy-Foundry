@@ -1,6 +1,7 @@
 #if defined(__linux__)
 
 #include "canopy_foundry/shell/platform.hpp"
+#include "canopy_foundry/shell/guide.hpp"
 
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
@@ -8,9 +9,14 @@
 #include <algorithm>
 #include <cstring>
 #include <sys/select.h>
+#include <sys/wait.h>
+#include <spawn.h>
+#include <thread>
 #include <string>
 #include <utility>
 #include <vector>
+
+extern char** environ;
 
 namespace canopy_foundry::shell {
 namespace {
@@ -18,6 +24,19 @@ namespace {
 constexpr int kTopHeight = 64;
 constexpr int kLeftWidth = 204;
 constexpr int kRightWidth = 316;
+
+void open_guide_document(ShellState& state, GuideDocument document) {
+    const auto path = guide_document_path(state.frontend_root, document);
+    if (path.empty()) { state.status = "Local guide not found. Check the Foundry installation."; return; }
+    auto filename = path.string();
+    char program[] = "xdg-open";
+    char* args[] = {program, filename.data(), nullptr};
+    pid_t child = 0;
+    const int error = posix_spawnp(&child, program, nullptr, nullptr, args, environ);
+    if (error != 0) { state.status = "Could not start the local guide viewer."; return; }
+    std::thread([child] { int status = 0; (void)waitpid(child, &status, 0); }).detach();
+    state.status = "Opening local guide in the default application.";
+}
 
 unsigned long color(Display* display, const char* name) {
     XColor exact{};
@@ -156,6 +175,7 @@ void draw_ida_card(
     int right,
     int bottom
 ) {
+    if (!state.companion_visible) return;
     const auto teal = color(display, "#55d5c5");
     panel(display, window, gc, left, top, right, bottom,
           color(display, "#101e2a"), color(display, "#286967"));
@@ -286,6 +306,10 @@ void render(Display* display, Window window, GC gc, ShellState& state, int width
     text(display, window, gc, "Simulation", 38, 449,
          state.view == View::Simulation ? bright : muted);
     text(display, window, gc, "S", 166, 449, deep);
+    panel(display, window, gc, 22, 480, 177, 518, raised, border_strong);
+    text(display, window, gc, state.mode == WorkspaceMode::Ida ? "Train Brain" : "Back to IDA", 35, 505, body);
+    text(display, window, gc, state.companion_visible ? "Hide IDA" : "Show IDA", 38, 544, muted);
+    text(display, window, gc, "Help / Guide  H", 38, 582, muted);
     line(display, window, gc, 22, height - 109, kLeftWidth - 22, height - 109, border);
     text(display, window, gc, "STANDALONE SURFACE", 22, height - 85, teal);
     text(display, window, gc, "Local contracts only.", 22, height - 62, muted);
@@ -295,7 +319,29 @@ void render(Display* display, Window window, GC gc, ShellState& state, int width
     const int right = width - kRightWidth - 28;
     text(display, window, gc, "CANOPY FOUNDRY / " + std::string(view_name(state.view)),
          left, 98, muted);
-    if (state.view == View::Overview) {
+    if (state.guide_visible) {
+        text(display, window, gc, "WELCOME TO FOUNDRY", left, 143, teal);
+        text(display, window, gc, "Start with IDA. Choose Train Brain to open Weave.", left, 190, bright);
+        draw_ida_card(display, window, gc, state, right - 224, 132, right, 340);
+        text(display, window, gc, "1. Check: foundry capabilities --pretty", left, 250, body);
+        text(display, window, gc, "Device/toolkit: nvidia-smi and nvcc --version.", left, 273, muted);
+        text(display, window, gc, "2. Plan: see the Starter Guide example", left, 315, body);
+        text(display, window, gc, "Check Run reports preflight only; it does not train.", left, 423, muted);
+        text(display, window, gc, "One-step plan fixture only; it has no training data.", left, 338, muted);
+        text(display, window, gc, "3. Load a request and resolve it in Train Brain.", left, 380, body);
+        text(display, window, gc, "Checkpoint inspection requires native validation.", left, 403, muted);
+        text(display, window, gc, "CUDA needs a supported GPU/toolkit. Fix a rejected plan and retry.", left, 445, amber);
+        text(display, window, gc, "Open a local guide:", left, 490, body);
+        panel(display, window, gc, left, 510, left + 145, 548, raised, border_strong);
+        panel(display, window, gc, left + 155, 510, left + 300, 548, raised, border_strong);
+        text(display, window, gc, "1  Starter guide", left + 10, 535, body);
+        text(display, window, gc, "2  Worker guide", left + 165, 535, body);
+        text(display, window, gc, state.status, left, 660, muted);
+        text(display, window, gc, state.view == View::Plan ? "Here: resolve request or inspect resume." : "Here: choose Train Brain to open planning.", left, 550, amber);
+        panel(display, window, gc, left, 580, left + 145, 620, raised, border_strong);
+        text(display, window, gc, "Continue", left + 12, 605, bright);
+        text(display, window, gc, "Reopen with H or Help / Guide", left + 160, 605, muted);
+    } else if (state.view == View::Overview) {
         text(display, window, gc, "LOCAL EXECUTION / INSPECTABLE BY DEFAULT", left, 143, teal);
         text(display, window, gc, "Make the execution contract visible.", left, 190, bright);
         text(display, window, gc, "A native shell for local Foundry contracts.", left, 225, body);
@@ -306,7 +352,7 @@ void render(Display* display, Window window, GC gc, ShellState& state, int width
               color(display, "#286e6c"), teal);
         text(display, window, gc, "Load local JSON", left + 13, 326, bright);
         panel(display, window, gc, left + 157, 302, left + 267, 339, raised, border_strong);
-        text(display, window, gc, "Plan lens", left + 170, 326, body);
+        text(display, window, gc, "Train Brain", left + 170, 326, body);
         panel(display, window, gc, left + 279, 302, left + 407, 339,
               color(display, "#286e6c"), teal);
         text(display, window, gc, "Run simulation", left + 291, 326, bright);
@@ -321,15 +367,15 @@ void render(Display* display, Window window, GC gc, ShellState& state, int width
             {"NETWORK", "disabled"},
         }, muted, body, border);
     } else if (state.view == View::Plan) {
-        text(display, window, gc, "Plan lens", left, 155, bright);
+        text(display, window, gc, state.mode == WorkspaceMode::TrainBrain ? "WEAVE / Plan" : "Plan lens", left, 155, bright);
         text(display, window, gc, "DISPLAYED CONTRACT IS NOT PROOF OF EXECUTION", left + 230, 155, amber);
         const int column = std::max(270, (right - left - 30) / 3);
         const int top = 204;
         for (int index = 0; index < 3; ++index) {
             const int panel_left = left + index * (column + 15);
             panel(display, window, gc, panel_left, top, panel_left + column, 560,
-                  index == 1 ? color(display, "#142d30") : raised,
-                  index == 1 ? color(display, "#286967") : border);
+                  index == 1 ? color(display, state.mode == WorkspaceMode::TrainBrain ? "#302221" : "#142d30") : raised,
+                  index == 1 ? color(display, state.mode == WorkspaceMode::TrainBrain ? "#935841" : "#286967") : border);
         }
         text(display, window, gc, "INPUT DOCUMENT", left + 18, top + 25, muted);
         text(display, window, gc, state.document.loaded ? state.document.name : "No local JSON loaded",
@@ -342,25 +388,41 @@ void render(Display* display, Window window, GC gc, ShellState& state, int width
             {"OPTIMIZER", state.document.optimizer},
         }, muted, body, border);
         const int middle = left + column + 15;
-        text(display, window, gc, "RESOLVED SHAPE", middle + 18, top + 25, teal);
+        text(display, window, gc, "RESOLVED SHAPE", middle + 18, top + 25,
+             state.mode == WorkspaceMode::TrainBrain ? amber : teal);
         text(display, window, gc, "ExecutionPlan", middle + 18, top + 53, bright);
         facts(display, window, gc, middle + 18, top + 82, column - 36, {
-            {"PLANNER", state.document.planner_revision},
-            {"PARALLEL", state.document.parallel_mode},
-            {"TRANSPORT", state.document.transport},
-            {"OWNER", "native planner"},
+            {"PLANNER", state.plan.planner_revision},
+            {"PARALLEL", state.plan.parallel_mode},
+            {"TRANSPORT", state.plan.transport},
+            {"PLAN", state.plan.resolved ? (state.plan.accepted ? "accepted" : "rejected") : "not resolved"},
             {"RUNTIME", "verify separately"},
         }, muted, body, border);
         const int last = middle + column + 15;
         text(display, window, gc, "PRECISION ROLES", last + 18, top + 25, muted);
         text(display, window, gc, "Representation map", last + 18, top + 53, bright);
         facts(display, window, gc, last + 18, top + 82, column - 36, {
-            {"MASTER", "explicit role"},
-            {"FORWARD", "execution view"},
-            {"BACKWARD DX", "execution view"},
-            {"GRADIENTS", "separate"},
-            {"ACCUMULATORS", "separate"},
+            {"MASTER", state.plan.master},
+            {"FORWARD", state.plan.forward},
+            {"BACKWARD DX", state.plan.backward},
+            {"GRADIENTS", state.plan.gradients},
+            {"ACCUMULATORS", state.plan.accumulators},
+            {"OPTIMIZER", state.plan.optimizer_state},
         }, muted, body, border);
+        panel(display, window, gc, left, 580, left + 180, 620, raised, border_strong);
+        text(display, window, gc, "Resolve selected request", left + 10, 605, body);
+        panel(display, window, gc, left, 628, left + 180, 668, raised, border_strong);
+        text(display, window, gc, "Inspect resume", left + 10, 653, body);
+        panel(display, window, gc, left + 195, 628, left + 340, 668, raised, border_strong);
+        text(display, window, gc, "Refresh status", left + 205, 653, body);
+        text(display, window, gc, state.status, left + 195, 605, muted);
+        panel(display, window, gc, left, 676, left + 105, 716, raised, border_strong);
+        text(display, window, gc, "Check Run", left + 10, 701, body);
+        panel(display, window, gc, left + 117, 676, left + 207, 716, raised, border_strong);
+        text(display, window, gc, "Run", left + 127, 701, body);
+        panel(display, window, gc, left + 219, 676, left + 309, 716, raised, border_strong);
+        text(display, window, gc, "Cancel", left + 229, 701, body);
+        text(display, window, gc, "Execution unavailable; see Help.", left + 322, 701, amber);
     } else if (state.view == View::Capabilities) {
         text(display, window, gc, "Capabilities", left, 155, bright);
         text(display, window, gc, "CATALOG != RUNTIME", right - 145, 155, amber);
@@ -524,7 +586,7 @@ int run_native_shell(ShellState& state) {
     XStoreName(display, window, "Canopy Foundry - Native Shell");
     XSelectInput(
         display, window,
-        ExposureMask | StructureNotifyMask | ButtonPressMask | KeyPressMask);
+        ExposureMask | StructureNotifyMask | ButtonReleaseMask | KeyPressMask);
     XMapWindow(display, window);
     GC gc = XCreateGC(display, window, 0, nullptr);
     bool running = true;
@@ -538,7 +600,19 @@ int run_native_shell(ShellState& state) {
                 width = event.xconfigure.width;
                 height = event.xconfigure.height;
             } else if (event.type == ButtonRelease) {
-                if (event.xbutton.x < kLeftWidth) {
+                if (state.guide_visible) {
+                    const int left = kLeftWidth + 45;
+                    if (event.xbutton.y >= 510 && event.xbutton.y < 548 && event.xbutton.x >= left && event.xbutton.x < left + 145)
+                        open_guide_document(state, GuideDocument::Starter);
+                    else if (event.xbutton.y >= 510 && event.xbutton.y < 548 && event.xbutton.x >= left + 155 && event.xbutton.x < left + 300)
+                        open_guide_document(state, GuideDocument::Foundry);
+                    else if (event.xbutton.x >= left && event.xbutton.x < left + 145 &&
+                        event.xbutton.y >= 580 && event.xbutton.y < 620) close_guide(state);
+                    continue;
+                }
+                if (event.xbutton.x < kLeftWidth && event.xbutton.y >= 562 && event.xbutton.y < 595) {
+                    state.guide_visible = true;
+                } else if (event.xbutton.x < kLeftWidth) {
                     const int y = event.xbutton.y;
                     if (y >= 112 && y < 147) state.view = View::Overview;
                     else if (y >= 156 && y < 191) state.view = View::Plan;
@@ -546,12 +620,50 @@ int run_native_shell(ShellState& state) {
                     else if (y >= 244 && y < 279) state.view = View::Evidence;
                 else if (y >= 343 && y < 378) state.view = View::Boundaries;
                 else if (y >= 426 && y < 461) state.view = View::Simulation;
+                else if (y >= 480 && y < 518) switch_workspace_mode(state,
+                    state.mode == WorkspaceMode::Ida ? WorkspaceMode::TrainBrain : WorkspaceMode::Ida);
+                else if (y >= 525 && y < 552) state.companion_visible = !state.companion_visible;
                 } else if (state.view == View::Overview &&
                            event.xbutton.x >= kLeftWidth + 45 &&
                        event.xbutton.x < kLeftWidth + 190 &&
                        event.xbutton.y >= 302 &&
                        event.xbutton.y < 350) {
                 state.status = "Linux shell: pass --document PATH to inspect a JSON document.";
+            } else if (state.view == View::Plan &&
+                       event.xbutton.x >= kLeftWidth + 45 &&
+                       event.xbutton.x < kLeftWidth + 45 + 180 &&
+                       event.xbutton.y >= 580 && event.xbutton.y < 620) {
+                resolve_selected_request(state);
+            } else if (state.view == View::Plan &&
+                       event.xbutton.x >= kLeftWidth + 45 &&
+                       event.xbutton.x < kLeftWidth + 45 + 180 &&
+                       event.xbutton.y >= 628 && event.xbutton.y < 668) {
+                inspect_selected_resume(state);
+            } else if (state.view == View::Plan &&
+                       event.xbutton.x >= kLeftWidth + 45 + 195 &&
+                       event.xbutton.x < kLeftWidth + 45 + 340 &&
+                       event.xbutton.y >= 628 && event.xbutton.y < 668) {
+                refresh_selected_run(state);
+            } else if (state.view == View::Plan &&
+                       event.xbutton.x >= kLeftWidth + 45 &&
+                       event.xbutton.x < kLeftWidth + 45 + 105 &&
+                       event.xbutton.y >= 676 && event.xbutton.y < 716) {
+                check_selected_run(state);
+            } else if (state.view == View::Plan &&
+                       event.xbutton.x >= kLeftWidth + 45 + 117 &&
+                       event.xbutton.x < kLeftWidth + 45 + 207 &&
+                       event.xbutton.y >= 676 && event.xbutton.y < 716) {
+                start_selected_run(state);
+            } else if (state.view == View::Plan &&
+                       event.xbutton.x >= kLeftWidth + 45 + 219 &&
+                       event.xbutton.x < kLeftWidth + 45 + 309 &&
+                       event.xbutton.y >= 676 && event.xbutton.y < 716) {
+                cancel_selected_run(state);
+            } else if (state.view == View::Overview &&
+                       event.xbutton.x >= kLeftWidth + 45 + 157 &&
+                       event.xbutton.x < kLeftWidth + 45 + 267 &&
+                       event.xbutton.y >= 302 && event.xbutton.y < 350) {
+                switch_workspace_mode(state, WorkspaceMode::TrainBrain);
             } else if (state.view == View::Overview &&
                        event.xbutton.x >= kLeftWidth + 45 + 279 &&
                        event.xbutton.x < kLeftWidth + 45 + 407 &&
@@ -562,7 +674,14 @@ int run_native_shell(ShellState& state) {
                 }
             } else if (event.type == KeyPress) {
                 const KeySym key = XLookupKeysym(&event.xkey, 0);
-                if (key == XK_Escape || key == XK_q) {
+                if (key == XK_h || key == XK_H) {
+                    if (state.guide_visible) close_guide(state);
+                    else state.guide_visible = true;
+                } else if (state.guide_visible) {
+                    if (key == XK_1 || key == XK_2) open_guide_document(state, key == XK_1 ? GuideDocument::Starter : GuideDocument::Foundry);
+                    else if (key == XK_Escape) close_guide(state);
+                    continue;
+                } else if (key == XK_Escape || key == XK_q) {
                     running = false;
                 } else if (key >= XK_1 && key <= XK_5) {
                     state.view = static_cast<View>(key - XK_1);
