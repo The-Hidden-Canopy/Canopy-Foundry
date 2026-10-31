@@ -1958,16 +1958,31 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
     if receipt["decision"] == "terminal":
         state = client.get_worker_run(run_id)
         hub_status = state["run"]["status"]
-        if hub_status == receipt["status"]:
-            return
-        if state["cancel_requested"] or hub_status in {"cancel_requested", *TERMINAL_RUN_STATUSES}:
+        if hub_status != receipt["status"]:
             raise WorkerError("local terminal receipt conflicts with Hub run state")
-        client.update(
-            run_id,
-            status=receipt["status"],
-            metrics_available=bool(receipt.get("metrics_available")),
-            event={"type": "worker_replay", "status": receipt["status"]},
-        )
+        if hub_status == "succeeded":
+            descriptor = job.get("native_execution_descriptor")
+            descriptor_sha256 = None
+            if descriptor is not None:
+                if not isinstance(descriptor, dict):
+                    raise WorkerError("cached execution descriptor is invalid")
+                descriptor_sha256 = sha256_id(
+                    descriptor.get("request_sha256"), "cached execution descriptor fingerprint"
+                )
+            elif receipt.get("native_evidence_sha256") is not None:
+                raise WorkerError("cached private execution descriptor requires reconciliation")
+            expected = build_worker_execution_receipt(
+                receipt_identity,
+                evidence_ref=receipt.get("evidence_ref"),
+                evidence_sha256=receipt.get("evidence_sha256"),
+                native_evidence_sha256=receipt.get("native_evidence_sha256"),
+                descriptor_sha256=descriptor_sha256,
+            )
+            if (receipt.get("metrics_available") is not True
+                    or state["cancel_requested"]
+                    or state["run"].get("evaluation", {}).get("complete") is not True
+                    or state["run"].get("execution_receipt_sha256") != expected["receipt_sha256"]):
+                raise WorkerError("local terminal receipt conflicts with Hub execution evidence")
         return
     if receipt["decision"] == "busy":
         state = client.get_worker_run(run_id)
