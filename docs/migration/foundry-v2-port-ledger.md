@@ -157,3 +157,79 @@ execution plan reports the owner, whether overlap is enabled, and a bounded
 group count; the current planner keeps overlap disabled and uses device
 ownership for compatibility. No optimizer math, host thread, or CUDA event
 schedule was promoted by this slice.
+
+## Ported in the seventh slice
+
+The seventh slice binds the accepted `PlanResolution` to the request at the
+service admission boundary:
+
+- `include/canopy_foundry/execution/plan.hpp`
+- `src/execution/plan.cpp`
+- `src/execution/service.cpp`
+- `tests/execution/execution_plan_test.cpp`
+
+`execution_plan_binding_error` re-resolves the request against the same
+capability snapshot carried by the accepted resolution and compares canonical
+plan SHA-256 hashes (`execution_plan_sha256` over the canonical plan JSON). A
+rejected, stale, or altered plan is refused with a bounded blocking result
+before the owned backend is launched: `LocalRunService::start` rejects
+unaccepted plans, runs the binding check, and only then hands the request and
+resolution to the backend. The one-shot `src/main.cpp` path resolves the plan
+from the on-disk request at launch, refuses rejected plans, records the plan
+hash in setup status, and passes the resolved plan into `execute_burn`. This
+closes the previous gap where the plan hash appeared in setup status but the
+execution path received only the unbound request.
+
+The binding check runs once at the service layer; trainer entry points do not
+re-resolve or re-hash the plan themselves, and no trainer-signature change
+was made. This is an admission-boundary repair, not a completed
+execution-plan backend. The typed view cache, forward tape, route-plan store,
+and optimizer ownership plan are still not used to drive CUDA allocation,
+forward/backward, routing, or optimizer steps. The CUDA training path retains
+its current checkpoint and resume behavior; this slice does not claim a newly
+verified fresh-process resume path or terminal execution receipt. The
+CPU/OpenCL paths remain unsupported for training under the current optimizer
+policy.
+
+## Public ecosystem compatibility status (2026-10-28)
+
+Compatibility here means an observed repository contract, not an assertion
+that a package is installed or that a cross-project training run succeeded.
+
+| Surface | Observed contract | Foundry compatibility |
+| --- | --- | --- |
+| IDA CLI public package | Package metadata reports `0.2.1`, Python `>=3.11`; optional inference dependencies are PyTorch `>=2.1`, Transformers `>=4.40`, Accelerate `>=0.28`, and Hugging Face Hub `>=0.26`. Public model loading is safetensors-based. | A client/inference surface, not a Foundry trainer backend or architecture adapter. No training/checkpoint handoff was verified. |
+| NeuroWeave | Local source identifies `0.1.0-dev`; `.nwbrain` schema 1 is a bounded directory package with manifest, NWIR graph, parameters, state policy, and lineage. | Structural/runtime package, not a Foundry weight/checkpoint format. No `.nwbrain` to Foundry model conversion was verified. |
+| NeuroCode | No current checkout or installable package was available in this workspace. | Version, architecture adapters, formats, and checkpoint semantics remain unverified; no adapter is claimed. |
+| Cortex Commons | No public Foundry worker execution profile or cross-project training run was available to verify here. | Foundry does not take over account, organization, quota, or hosted-execution authority. No live Cortex integration is claimed. |
+| Dependency loader | No operator-installed adapter or pinned loader package was available in the Foundry checkout. | Public Foundry remains standalone; deployment-specific adapters remain operator-installed and outside the public tree. |
+
+Foundry's current public architecture surfaces are the explicit GPT-2
+`hf_gpt2_native_v1` converter contract, the native Llama-shaped dense contract
+(including SmolLM-shaped models), and the generic top-k SwiGLU MoE contract
+(observed Mixtral-shaped surface). Qwen-MoE shared-expert layouts are rejected.
+These are Foundry conversion contracts, not IDA CLI, NeuroWeave, or NeuroCode
+adapters; package names alone do not establish layout compatibility.
+
+Foundry's actual resumable CUDA path remains the existing single-GPU native
+checkpoint format: model and optimizer safetensors plus generation/cursor
+validation; model-parallel exact resume remains rejected. The planner currently
+reports BF16 masters for the existing packed FP8 profile and represents the
+E4M3 packed view separately; the Ampere adapter stages BF16 operands for GEMM.
+This is not native MXFP8 arithmetic. No MXFP8 adapter layout, marmoset regional
+adapter, or private kernel was assumed or added. No weights, checkpoints,
+datasets, or conversions were changed.
+
+The native resume pair is published as two individually temp-file/rename
+SafeTensors writes. Resume checks the model and optimizer `cumulative_opt_steps`
+generation when present and restores optimizer state and data cursor; the pair
+is not a single atomic directory transaction, so interruption between writes
+can leave a mismatched pair that must fail closed. Compatibility with other
+projects' SafeTensors files is not implied by the container format: architecture
+contract, tensor names, shapes, and dtype must match the selected native model.
+
+The local verification environment had a Quadro P5200 (compute capability 6.1)
+but no CUDA compiler; the checked-in default native architecture is newer. A
+hardware smoke and output/gradient comparison against baseline therefore
+remain unrun. Passing contract/unit tests or simulated worker behavior do not
+constitute end-to-end acceptance.
