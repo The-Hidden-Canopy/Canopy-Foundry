@@ -275,10 +275,14 @@ void draw_facts(HDC dc, int left, int top, int width, const std::vector<std::pai
     line(dc, left, top, left + width, top, color(30, 42, 56));
     int y = top + 12;
     for (const auto& fact : facts) {
-        draw_text(dc, fact.first, left, y, width / 2, 18, 10, color(116, 130, 148));
-        draw_text(dc, fact.second, left + width / 2, y, width / 2, 18, 10, color(185, 197, 209), false, DT_RIGHT);
-        line(dc, left, y + 24, left + width, y + 24, color(24, 34, 46));
-        y += 36;
+        const bool stacked = width < 230;
+        draw_text(dc, fact.first, left, y, stacked ? width : width / 2, 18, 10, color(116, 130, 148));
+        draw_text(dc, fact.second, stacked ? left : left + width / 2,
+                  y + (stacked ? 16 : 0), stacked ? width : width / 2, 18, 10,
+                  color(185, 197, 209), false, stacked ? DT_LEFT : DT_RIGHT);
+        line(dc, left, y + (stacked ? 36 : 24), left + width,
+             y + (stacked ? 36 : 24), color(24, 34, 46));
+        y += stacked ? 42 : 36;
     }
 }
 
@@ -310,7 +314,7 @@ void draw_plan(HDC dc, int left, int right) {
     draw_text(dc, g_state->mode == WorkspaceMode::TrainBrain ? "WEAVE / BRAIN TRAINING" : "CANOPY FOUNDRY / PLAN LENS", left, 92, right - left, 18, 9, color(116, 130, 148), true);
     draw_text(dc, "Plan lens", left, 122, 500, 48, 36, color(231, 237, 243), false);
     draw_text(dc, "DISPLAYED CONTRACT IS NOT PROOF OF EXECUTION", left + 230, 140, 300, 18, 9, color(240, 174, 104), true);
-    const int column = std::max(270, (right - left - 30) / 3);
+    const int column = std::max(1, (right - left - 30) / 3);
     const int top = 204;
     for (int index = 0; index < 3; ++index) {
         panel(dc, left + index * (column + 15), top, left + index * (column + 15) + column, 560,
@@ -321,7 +325,7 @@ void draw_plan(HDC dc, int left, int right) {
     }
     draw_text(dc, "INPUT DOCUMENT", left + 18, top + 18, column - 36, 16, 9, color(116, 130, 148), true);
     draw_text(dc, g_state->document.loaded ? g_state->document.name : "No local JSON loaded",
-              left + 18, top + 45, column - 36, 22, 14, color(231, 237, 243), true, DT_WORDBREAK);
+              left + 18, top + 45, column - 36, 44, 14, color(231, 237, 243), true, DT_WORDBREAK);
     draw_facts(dc, left + 18, top + 92, column - 36, {
         {"SCHEMA", g_state->document.schema},
         {"BACKEND", g_state->document.backend},
@@ -333,7 +337,7 @@ void draw_plan(HDC dc, int left, int right) {
     const int middle = left + column + 15;
     draw_text(dc, "RESOLVED SHAPE", middle + 18, top + 18, column - 36, 16, 9,
               g_state->mode == WorkspaceMode::TrainBrain ? color(240, 174, 104) : color(85, 213, 197), true);
-    draw_text(dc, "ExecutionPlan", middle + 18, top + 45, column - 36, 24, 17, color(231, 237, 243), true);
+    draw_text(dc, "ExecutionPlan", middle + 18, top + 45, column - 36, 44, column < 230 ? 12 : 17, color(231, 237, 243), true, DT_WORDBREAK);
     draw_facts(dc, middle + 18, top + 92, column - 36, {
         {"PLANNER", g_state->plan.planner_revision},
         {"PARALLEL", g_state->plan.parallel_mode},
@@ -344,7 +348,7 @@ void draw_plan(HDC dc, int left, int right) {
 
     const int last = middle + column + 15;
     draw_text(dc, "PRECISION ROLES", last + 18, top + 18, column - 36, 16, 9, color(116, 130, 148), true);
-    draw_text(dc, "Representation map", last + 18, top + 45, column - 36, 24, 15, color(231, 237, 243), true);
+    draw_text(dc, "Representation map", last + 18, top + 45, column - 36, 44, column < 230 ? 12 : 15, color(231, 237, 243), true, DT_WORDBREAK);
     draw_facts(dc, last + 18, top + 92, column - 36, {
         {"MASTER", g_state->plan.master},
         {"FORWARD", g_state->plan.forward},
