@@ -25,6 +25,7 @@ int main() {
         auto temporary = status;
         temporary += ".tmp";
         if (fs::exists(temporary)) throw std::runtime_error("temporary status file remains after success");
+        input.close(); // Release the Windows reader before removing its owned fixture.
         fs::remove_all(root);
         return 0;
     } catch (const std::exception& error) {

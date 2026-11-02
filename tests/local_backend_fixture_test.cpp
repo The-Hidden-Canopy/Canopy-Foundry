@@ -157,7 +157,22 @@ int wmain(int argc, wchar_t** argv) {
     foreign_payload["model"]["architecture_contract"] = "external_graph_v1";
     write(foreign.request_path, foreign_payload.dump(2));
     LocalRunService foreign_service(make_local_native_backend(foreign.config), capabilities);
-    assert(foreign_service.start(foreign.request_path).exit_code == 3 && foreign_service.may_shutdown());
+    // The retained backend admits preparation asynchronously. A foreign model
+    // must stop during preparation, before it creates a run directory or probe.
+    assert(ida_native::load_request(foreign.request_path).model.architecture_contract == "external_graph_v1");
+    const auto foreign_started = foreign_service.start(foreign.request_path);
+    assert(foreign_started.exit_code == 0 && !foreign_started.run_id.empty());
+    assert(!foreign_service.may_shutdown());
+    LocalOperationResult foreign_result;
+    for (int i = 0; i < 300; ++i) {
+        foreign_result = foreign_service.status(foreign_started.run_id);
+        if (foreign_result.job_stopped) break;
+        Sleep(10);
+    }
+    assert(foreign_result.job_stopped && foreign_result.run_id == foreign_started.run_id);
+    assert(foreign_result.message.find("before process creation") != std::string::npos);
+    assert(foreign_result.message.find("local model layout does not match a supported public contract") != std::string::npos);
+    assert(foreign_service.may_shutdown());
     assert(std::filesystem::is_empty(foreign.run_root));
 
     Case cancel_preparation(base, "cancel-preparation", repository);
