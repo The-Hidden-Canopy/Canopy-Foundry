@@ -116,11 +116,12 @@ void draw_sprite(
     const SpriteFrame& frame,
     int left,
     int top,
-    int subpixel,
+    SpriteSize size,
     COLORREF fallback
 ) {
-    if (frame.width <= 0 || frame.height <= 0 || subpixel <= 0) return;
-    const int cell_width = subpixel * 2;
+    if (frame.width <= 0 || frame.height <= 0 || size.width <= 0 || size.height <= 0) return;
+    const auto map_x = [&](int x) { return left + static_cast<int>(static_cast<std::int64_t>(x) * size.width / (frame.width * 2LL)); };
+    const auto map_y = [&](int y) { return top + static_cast<int>(static_cast<std::int64_t>(y) * size.height / (frame.height * 2LL)); };
     for (int y = 0; y < frame.height; ++y) {
         for (int x = 0; x < frame.width; ++x) {
             const auto& cell = frame.cells[static_cast<std::size_t>(y * frame.width + x)];
@@ -135,10 +136,10 @@ void draw_sprite(
                     fill(
                         dc,
                         RECT{
-                            left + x * cell_width + part_x * subpixel,
-                            top + y * cell_width + part_y * subpixel,
-                            left + x * cell_width + (part_x + 1) * subpixel,
-                            top + y * cell_width + (part_y + 1) * subpixel,
+                            map_x(x * 2 + part_x),
+                            map_y(y * 2 + part_y),
+                            map_x(x * 2 + part_x + 1),
+                            map_y(y * 2 + part_y + 1),
                         },
                         value == color(0, 0, 0) && !foreground ? fallback : value);
                 }
@@ -147,12 +148,47 @@ void draw_sprite(
     }
 }
 
+bool draw_native_sprite(HDC dc, const NativeSpriteFrame& frame, int left, int top,
+                        SpriteSize size, COLORREF background) {
+    if (frame.width <= 0 || frame.height <= 0 || size.width <= 0 || size.height <= 0 ||
+        frame.view_left < 0 || frame.view_top < 0 || frame.view_width <= 0 || frame.view_height <= 0 ||
+        frame.view_left + frame.view_width > frame.width || frame.view_top + frame.view_height > frame.height ||
+        frame.pixels.size() != static_cast<std::size_t>(frame.width) * frame.height) return false;
+    // A top-down DIB preserves the authored RGB values and soft alpha edges.
+    std::vector<std::uint32_t> dib;
+    dib.reserve(static_cast<std::size_t>(frame.view_width) * frame.view_height);
+    for (int y = frame.view_top; y < frame.view_top + frame.view_height; ++y)
+      for (int x = frame.view_left; x < frame.view_left + frame.view_width; ++x) {
+        const auto& pixel = frame.pixels[static_cast<std::size_t>(y * frame.width + x)];
+        const auto blend = [&](int channel, int bg) {
+            return (channel * pixel.alpha + bg * (255 - pixel.alpha) + 127) / 255;
+        };
+        const auto r = blend(pixel.red, GetRValue(background));
+        const auto g = blend(pixel.green, GetGValue(background));
+        const auto b = blend(pixel.blue, GetBValue(background));
+        dib.push_back((static_cast<std::uint32_t>(r) << 16) |
+                      (static_cast<std::uint32_t>(g) << 8) | b);
+    }
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = frame.view_width;
+    info.bmiHeader.biHeight = -frame.view_height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    const int previous = SetStretchBltMode(dc, COLORONCOLOR);
+    const int copied = StretchDIBits(dc, left, top, size.width, size.height, 0, 0,
+                                    frame.view_width, frame.view_height, dib.data(), &info,
+                                    DIB_RGB_COLORS, SRCCOPY);
+    if (previous) SetStretchBltMode(dc, previous);
+    return copied != 0 && copied != GDI_ERROR;
+}
+
 void draw_ida_card(HDC dc, int left, int top, int right, int bottom) {
     if (!g_state->companion_visible) return;
-    const int pulse = 40 + ((static_cast<int>(g_state->animation_tick % 8) * 7));
     panel(dc, left, top, right, bottom, color(16, 30, 42), color(40, 105, 103));
     draw_text(dc, "IDA CLI / LOCAL PRESENCE", left + 16, top + 14, right - left - 32, 18,
-              9, color(85 + pulse / 8, 213, 197), true);
+              11, color(85, 213, 197), true);
     const auto* frame = sprite_frame_at(g_state->ida_sprite, g_state->animation_tick);
     if (frame == nullptr) {
         draw_text(dc, "Presentation atlas unavailable.", left + 16, top + 72,
@@ -162,28 +198,25 @@ void draw_ida_card(HDC dc, int left, int top, int right, int bottom) {
         return;
     }
     const int available_width = std::max(1, right - left - 24);
-    const int available_height = std::max(1, bottom - top - 68);
-    const int subpixel = std::clamp(
-        std::min(available_width / std::max(1, frame->width * 2),
-                 available_height / std::max(1, frame->height * 2)),
-        2,
-        4);
-    const int sprite_width = frame->width * subpixel * 2;
-    const int sprite_left = left + (right - left - sprite_width) / 2;
+    const int available_height = std::max(1, bottom - top - 70);
+    const auto* native = native_sprite_frame_at(g_state->ida_sprite, g_state->animation_tick);
+    const auto size = native ? fit_native_sprite(*native, available_width, available_height)
+                             : fit_sprite(*frame, available_width, available_height);
+    const int sprite_left = left + (right - left - size.width) / 2;
     const int sprite_top = top + 40 + sprite_breathe_offset(g_state->animation_tick);
-    draw_sprite(dc, *frame, sprite_left, sprite_top, subpixel, color(16, 30, 42));
-    const int frame_number = static_cast<int>(
-        (g_state->animation_tick / std::max(1, g_state->ida_sprite.frame_hold_ticks)) %
-        std::max<std::size_t>(1, g_state->ida_sprite.frames.size())) + 1;
+    if (!native || !draw_native_sprite(dc, *native, sprite_left, sprite_top, size, color(16, 30, 42))) {
+        const auto fallback_size = fit_sprite(*frame, available_width, available_height);
+        draw_sprite(dc, *frame, left + (right - left - fallback_size.width) / 2,
+                    sprite_top, fallback_size, color(16, 30, 42));
+    }
     draw_text(
         dc,
-        "FRAME " + std::to_string(frame_number) + "/" +
-            std::to_string(g_state->ida_sprite.frames.size()) + "  ·  PRESENTATION ONLY",
+        "PRESENTATION ONLY",
         left + 12,
         bottom - 25,
         right - left - 24,
         16,
-        8,
+        10,
         color(116, 130, 148),
         false,
         DT_CENTER);
@@ -208,8 +241,7 @@ void draw_header(HDC dc, int width) {
     fill(dc, RECT{43, 22, 48, 42}, color(85, 213, 197));
     draw_text(dc, "CANOPY FOUNDRY", 61, 17, 260, 18, 12, color(231, 237, 243), true);
     draw_text(dc, "NATIVE LOCAL SHELL", 61, 36, 260, 14, 8, color(116, 130, 148));
-    const int pulse = 70 + static_cast<int>((g_state->animation_tick % 6) * 8);
-    fill(dc, RECT{width - 144, 30, width - 137, 37}, color(55, pulse, 185));
+    fill(dc, RECT{width - 144, 30, width - 137, 37}, color(55, 110, 185));
     draw_text(dc, "LOCAL ONLY", width - 128, 27, 77, 16, 9, color(116, 130, 148), true);
     line(dc, width - 44, 27, width - 44, 41, color(43, 58, 77));
     draw_text(dc, "NATIVE", width - 34, 27, 30, 16, 8, color(185, 197, 209), true, DT_RIGHT);
@@ -287,17 +319,23 @@ void draw_facts(HDC dc, int left, int top, int width, const std::vector<std::pai
 }
 
 void draw_overview(HDC dc, int left, int right, int height) {
+    const auto ida_card = companion_card_size(right - left);
+    const int copy_width = std::max(1, std::min(410, right - left -
+        (g_state->companion_visible ? ida_card.width + 18 : 0)));
     draw_text(dc, "CANOPY FOUNDRY / OVERVIEW", left, 92, right - left, 18, 9, color(116, 130, 148), true);
     draw_text(dc, "LOCAL EXECUTION / INSPECTABLE BY DEFAULT", left, 132, right - left, 18, 10, color(85, 213, 197), true);
-    draw_text(dc, "Make the execution contract visible.", left, 161, 410, 92, 34, color(231, 237, 243), false, DT_WORDBREAK);
+    draw_text(dc, "Make the execution contract visible.", left, 161, copy_width, 92,
+              copy_width < 300 ? 24 : 34, color(231, 237, 243), false, DT_WORDBREAK);
     draw_text(dc,
               "A native shell for local Foundry contracts. It shows the current document and evidence posture without launching training or contacting the Hub.",
-              left, 265, 410, 68, 13, color(185, 197, 209), false, DT_WORDBREAK);
-    draw_ida_card(dc, right - 224, 132, right, 340);
+              left, 265, copy_width, 68, copy_width < 300 ? 12 : 13,
+              color(185, 197, 209), false, DT_WORDBREAK);
+    draw_ida_card(dc, right - ida_card.width, 132, right, 132 + ida_card.height);
     button(dc, "Load local JSON", left, 352, 145, true);
     button(dc, "Train Brain", left + 157, 352, 110);
     button(dc, "Run simulation", left + 279, 352, 128);
-    draw_text(dc, g_state->status, left, 408, 530, 40, 10, color(116, 130, 148), false, DT_WORDBREAK);
+    draw_text(dc, g_state->status, left, 408, std::min(530, copy_width), 40, 10,
+              color(116, 130, 148), false, DT_WORDBREAK);
 
     const int card_top = std::max(470, height - 220);
     panel(dc, left, card_top, left + 330, height - 24, color(18, 40, 43), color(40, 105, 103));
@@ -365,7 +403,7 @@ void draw_plan(HDC dc, int left, int right) {
     button(dc, "Check Run", left, 676, 105);
     button(dc, "Run", left + 117, 676, 90);
     button(dc, "Cancel", left + 219, 676, 90);
-    draw_text(dc, "Local execution unavailable; open Help for options.",
+    draw_text(dc, "Run requires a verified local owner; see Help.",
               left + 322, 686, right - left - 322, 30, 10, color(240, 174, 104), false, DT_WORDBREAK);
 }
 
@@ -440,7 +478,7 @@ void draw_boundaries(HDC dc, int left, int right) {
               left + column + gap + 18, 299, column - 36, 70, 12, color(185, 197, 209), false, DT_WORDBREAK);
     panel(dc, left, 416, right, 535, color(20, 28, 39), color(30, 42, 56));
     draw_text(dc, "THIS NATIVE SHELL", left + 18, 436, 220, 16, 9, color(116, 130, 148), true);
-    draw_text(dc, "Window lifecycle and local presentation only. No socket, worker, training launch, or cloud connection.",
+    draw_text(dc, "Local inspection and optional retained-owner control. No Hub, cloud, or promotion authority.",
               left + 18, 465, right - left - 36, 40, 12, color(185, 197, 209), false, DT_WORDBREAK);
 }
 
@@ -468,12 +506,14 @@ void draw_simulation(HDC dc, int left, int right, int height) {
     const auto muted = color(116, 130, 148);
     const auto teal = color(85, 213, 197);
     const auto amber = color(240, 174, 104);
-    const int work_right = right - 242;
+    const auto ida_card = companion_card_size(right - left);
+    const int work_right = right - (g_state->companion_visible ? ida_card.width + 18 : 0);
     const int active_stage = simulation_stage_index(g_state->simulation.stage);
 
     draw_text(dc, "CANOPY FOUNDRY / EXECUTION THEATER", left, 92, right - left, 18, 9, muted, true);
-    draw_text(dc, "SIMULATION / SYNTHETIC WALKTHROUGH", left, 122, work_right - left, 18, 10, amber, true);
-    draw_ida_card(dc, right - 224, 132, right, 340);
+    draw_text(dc, "SIMULATION: " + std::string(simulation_status_name(g_state->simulation)) + " / SYNTHETIC",
+              left, 122, work_right - left, 18, 10, amber, true);
+    draw_ida_card(dc, right - ida_card.width, 132, right, 132 + ida_card.height);
 
     panel(dc, left, 132, work_right, 218, raised, border);
     draw_text(dc, "REQUEST -> PLAN -> ROUTE -> RUN -> SAVE", left + 16, 150,
@@ -481,6 +521,7 @@ void draw_simulation(HDC dc, int left, int right, int height) {
     const char* stages[] = {"REQUEST", "PLAN", "ROUTE", "RUN", "SAVE", "DONE"};
     const int track_left = left + 28;
     const int track_right = work_right - 28;
+    const int label_width = std::max(1, std::min(84, (track_right - track_left) / 5 + 4));
     line(dc, track_left, 184, track_right, 184, border_strong);
     for (int index = 0; index < 6; ++index) {
         const int x = track_left + (track_right - track_left) * index / 5;
@@ -490,7 +531,7 @@ void draw_simulation(HDC dc, int left, int right, int height) {
                       x + (current ? 9 : 7), 191 + (current ? 2 : 0)},
              reached ? (current ? amber : teal) : bg);
         outline(dc, RECT{x - 9, 175, x + 9, 193}, reached ? (current ? amber : teal) : border_strong, 9);
-        draw_text(dc, stages[index], x - 42, 198, 84, 14, 8,
+        draw_text(dc, stages[index], x - label_width / 2, 198, label_width, 14, 8,
                   reached ? bright : muted, true, DT_CENTER);
     }
 
@@ -524,20 +565,23 @@ void draw_simulation(HDC dc, int left, int right, int height) {
               left + 18, 478, work_right - left - 36, 16, 9, muted);
 
     const int footer_top = std::min(540, std::max(520, height - 166));
+    const bool compact_footer = work_right - left < 380;
     panel(dc, left, footer_top, work_right, height - 24, raised, border);
     draw_text(dc, "SIMULATED EVENT TAPE", left + 18, footer_top + 22,
               work_right - left - 36, 16, 9, amber, true);
     draw_text(dc, "STAGE  " + std::string(simulation_stage_name(g_state->simulation.stage)),
               left + 18, footer_top + 50, 180, 18, 12, bright, true);
     draw_text(dc, "PROGRESS  " + std::to_string(g_state->simulation.progress_percent) + "%",
-              left + 210, footer_top + 50, 150, 18, 10, teal, true);
+              compact_footer ? left + 18 : left + 210, footer_top + (compact_footer ? 72 : 50),
+              compact_footer ? work_right - left - 36 : 150, 18, 10, teal, true);
     draw_text(dc, "MEMORY  " + std::to_string(g_state->simulation.memory_percent) + "% synthetic pressure",
-              left + 18, footer_top + 79, work_right - left - 36, 16, 9, body);
-    fill(dc, RECT{left + 18, footer_top + 103, work_right - 18, footer_top + 108}, border_strong);
-    fill(dc, RECT{left + 18, footer_top + 103,
+              left + 18, footer_top + (compact_footer ? 94 : 79), work_right - left - 36, 16, 9, body);
+    const int meter_y = footer_top + (compact_footer ? 116 : 103);
+    fill(dc, RECT{left + 18, meter_y, work_right - 18, meter_y + 5}, border_strong);
+    fill(dc, RECT{left + 18, meter_y,
                   left + 18 + (work_right - left - 36) * g_state->simulation.memory_percent / 100,
-                  footer_top + 108}, amber);
-    draw_text(dc, "S start/restart   P pause   R reset   SPACE pause/resume",
+                  meter_y + 5}, amber);
+    draw_text(dc, "S: start  P/Space: pause or resume  R: reset",
               left + 18, height - 43, work_right - left - 36, 16, 9, muted);
 }
 
@@ -545,15 +589,19 @@ void draw_center(HDC dc, int width, int height) {
     const int left = kLeftWidth + 45;
     const int right = width - kRightWidth - 28;
     if (g_state->guide_visible) {
+        const auto ida_card = companion_card_size(right - left);
+        const int guide_width = std::max(1, std::min(460, right - left -
+            (g_state->companion_visible ? ida_card.width + 18 : 0)));
         draw_text(dc, "WELCOME TO FOUNDRY", left, 102, right - left, 20, 10, color(85, 213, 197), true);
-        draw_text(dc, "Start with IDA. Choose Train Brain to open Weave.", left, 140, 460, 65, 22, color(231, 237, 243), false, DT_WORDBREAK);
-        draw_ida_card(dc, right - 224, 132, right, 340);
+        draw_text(dc, "Start with IDA. Choose Train Brain to open Weave.", left, 140, guide_width, 65,
+                  guide_width < 300 ? 18 : 22, color(231, 237, 243), false, DT_WORDBREAK);
+        draw_ida_card(dc, right - ida_card.width, 132, right, 132 + ida_card.height);
         draw_text(dc,
             "1. Check: foundry capabilities --pretty, nvidia-smi, and nvcc --version.\n\n"
             "2. Try foundry plan configs/examples/planning_only_request.json --pretty. The fixture has no training data.\n\n"
             "3. In Train Brain, resolve a request or use Check Run. Neither starts training. Checkpoint inspection is preliminary.\n\n"
             "CUDA needs a supported GPU/toolkit; CPU/OpenCL training is disabled. Fix rejected requests and retry.",
-            left, 230, 460, 260, 12, color(185, 197, 209), false, DT_WORDBREAK);
+            left, 230, guide_width, 260, 12, color(185, 197, 209), false, DT_WORDBREAK);
         button(dc, "1  Starter guide", left, 510, 145);
         button(dc, "2  Worker guide", left + 155, 510, 145);
         draw_text(dc, g_state->status, left, 635, right - left, 38, 10, color(116, 130, 148), false, DT_WORDBREAK);
@@ -654,16 +702,39 @@ void select_view(int y) {
 
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l_param) {
     switch (message) {
+        // WM_PAINT paints the complete client area; a separate background erase
+        // would briefly expose the class brush on resize or restore.
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_SIZE:
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
         case WM_PAINT: {
             PAINTSTRUCT paint_struct{};
-            HDC dc = BeginPaint(window, &paint_struct);
+            HDC paint_dc = BeginPaint(window, &paint_struct);
             RECT client{};
             GetClientRect(window, &client);
+            HDC buffer = CreateCompatibleDC(paint_dc);
+            HBITMAP bitmap = buffer && client.right > 0 && client.bottom > 0
+                ? CreateCompatibleBitmap(paint_dc, client.right, client.bottom) : nullptr;
+            HGDIOBJ previous = bitmap ? SelectObject(buffer, bitmap) : nullptr;
+            const bool buffered = previous && previous != HGDI_ERROR;
+            HDC dc = buffered ? buffer : paint_dc;
+            if (buffered) {
+                IntersectClipRect(dc, paint_struct.rcPaint.left, paint_struct.rcPaint.top,
+                                  paint_struct.rcPaint.right, paint_struct.rcPaint.bottom);
+            }
             fill(dc, client, color(10, 14, 20));
             draw_header(dc, client.right);
             draw_nav(dc, client.bottom);
             draw_center(dc, client.right, client.bottom);
             draw_right_rail(dc, client.right, client.bottom);
+            if (buffered) {
+                BitBlt(paint_dc, 0, 0, client.right, client.bottom, buffer, 0, 0, SRCCOPY);
+                SelectObject(buffer, previous);
+            }
+            if (bitmap) DeleteObject(bitmap);
+            if (buffer) DeleteDC(buffer);
             EndPaint(window, &paint_struct);
             return 0;
         }
@@ -784,9 +855,29 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
             return 0;
         case WM_TIMER:
             if (w_param == kAnimationTimer && g_state != nullptr) {
-                ++g_state->animation_tick;
+                const auto previous_animation = g_state->animation_tick++;
+                const auto previous_simulation = g_state->simulation.tick;
                 advance_simulation(g_state->simulation);
-                InvalidateRect(window, nullptr, FALSE);
+                // Keep the simulation clock advancing while minimized, but defer
+                // painting until WM_SIZE invalidates the restored client area.
+                if (IsIconic(window)) return 0;
+                const bool show_simulation = !g_state->guide_visible &&
+                    g_state->view == View::Simulation;
+                const bool show_companion = g_state->companion_visible &&
+                    (g_state->guide_visible || g_state->view == View::Overview || show_simulation);
+                const bool companion_changed = show_companion &&
+                    sprite_visual_changes(g_state->ida_sprite, previous_animation, g_state->animation_tick);
+                RECT client{};
+                GetClientRect(window, &client);
+                if (show_simulation && previous_simulation != g_state->simulation.tick) {
+                    const RECT center{kLeftWidth, kTopHeight, client.right - kRightWidth, client.bottom};
+                    InvalidateRect(window, &center, FALSE);
+                } else if (companion_changed) {
+                    const int right = client.right - kRightWidth - 28;
+                    const auto ida_card = companion_card_size(right - (kLeftWidth + 45));
+                    const RECT card{right - ida_card.width, 132, right, 132 + ida_card.height};
+                    InvalidateRect(window, &card, FALSE);
+                }
                 return 0;
             }
             return 0;

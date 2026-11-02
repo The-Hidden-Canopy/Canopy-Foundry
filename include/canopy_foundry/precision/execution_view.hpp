@@ -123,10 +123,14 @@ public:
         const ExecutionViewBuilder& builder
     );
 
-    // Optimizer mutation or a newly published checkpoint calls this before
-    // any role may reuse the previous generation's packed representation.
+    // Optimizer mutation or a newly published checkpoint advances this tensor's
+    // generation floor. Older generations cannot be rebuilt or returned.
     void invalidate(TensorId tensor, TensorGeneration new_generation);
+    // Clears cached views without forgetting per-tensor generation floors.
     void invalidate_all();
+    // Only after all old-model consumers are retired, discard both cached
+    // views and generation floors so a new model may reuse tensor IDs.
+    void reset_for_new_model();
 
     [[nodiscard]] std::size_t size() const noexcept { return views_.size(); }
     [[nodiscard]] bool empty() const noexcept { return views_.empty(); }
@@ -136,6 +140,7 @@ public:
 
 private:
     std::map<ExecutionViewKey, PackedExecutionView> views_;
+    std::map<TensorId, TensorGeneration> generations_;
     ExecutionViewCacheStats stats_{};
 };
 

@@ -1,6 +1,20 @@
 if(NOT DEFINED FOUNDRY OR NOT EXISTS "${FOUNDRY}")
   message(FATAL_ERROR "FOUNDRY test executable is unavailable")
 endif()
+unset(ENV{CANOPY_FOUNDRY_OWNER_ENDPOINT})
+if(NOT FOUNDRY_LOCAL_OWNER_ENABLED)
+  set(ENV{CANOPY_FOUNDRY_OWNER_ENDPOINT} "C:/no-such-owner/endpoint.json")
+  execute_process(COMMAND "${FOUNDRY}" status absent-fixture RESULT_VARIABLE disabled_code ERROR_VARIABLE disabled_error)
+  if(NOT disabled_code EQUAL 4 OR NOT disabled_error MATCHES "no local run service is connected")
+    message(FATAL_ERROR "disabled build must ignore configured owner endpoint: ${disabled_code} ${disabled_error}")
+  endif()
+  execute_process(COMMAND "${FOUNDRY}" current --owner-endpoint "C:/no-such-owner/endpoint.json"
+    RESULT_VARIABLE disabled_code ERROR_VARIABLE disabled_error)
+  if(NOT disabled_code EQUAL 4 OR NOT disabled_error MATCHES "transport is disabled")
+    message(FATAL_ERROR "explicit endpoint must be blocked in disabled build: ${disabled_code} ${disabled_error}")
+  endif()
+  unset(ENV{CANOPY_FOUNDRY_OWNER_ENDPOINT})
+endif()
 execute_process(COMMAND "${FOUNDRY}" cancel absent-fixture
   RESULT_VARIABLE code OUTPUT_VARIABLE output ERROR_VARIABLE error)
 if(NOT code EQUAL 4 OR NOT error MATCHES "no local run service is connected")
@@ -25,10 +39,42 @@ if(NOT code EQUAL 0 OR NOT output MATCHES "unavailable")
   message(FATAL_ERROR "Help did not explain execution availability")
 endif()
 
+# Simulate inspection after an owner restart: the old files are evidence only.
+set(inspect_fixture "${CMAKE_CURRENT_BINARY_DIR}/foundry-inspect-fixture/local-restart-fixture")
+file(MAKE_DIRECTORY "${inspect_fixture}/output")
+file(WRITE "${inspect_fixture}/launch-provenance.pending" "{partial")
+file(WRITE "${inspect_fixture}/probe-process.json" "{partial")
+file(WRITE "${inspect_fixture}/trainer-process.json" "{\"run_id\":\"different-run\"}")
+file(WRITE "${inspect_fixture}/probe-process-recovery-1.json" "{\"run_id\":\"local-restart-fixture\"}")
+execute_process(COMMAND "${FOUNDRY}" inspect-local-run "${inspect_fixture}"
+  RESULT_VARIABLE code OUTPUT_VARIABLE output ERROR_VARIABLE error)
+if(NOT code EQUAL 4 OR NOT output MATCHES "not verified" OR NOT output MATCHES "malformed or partial" OR NOT output MATCHES "identity missing or mismatched")
+  message(FATAL_ERROR "restart evidence was not kept unresolved: ${code} ${output} ${error}")
+endif()
+execute_process(COMMAND "${FOUNDRY}" inspect-local-run "${inspect_fixture}/"
+  RESULT_VARIABLE code OUTPUT_VARIABLE output ERROR_VARIABLE error)
+if(NOT code EQUAL 4 OR NOT output MATCHES "probe-process-recovery-1.json: parseable local data")
+  message(FATAL_ERROR "trailing slash changed inspected run identity: ${code} ${output} ${error}")
+endif()
+
 # The first-use fixture is a real request shape, not a model-config file.
 # A backend rejection (3) is valid; a parsing failure (1) is not.
 if(NOT DEFINED FOUNDRY_EXAMPLE OR NOT EXISTS "${FOUNDRY_EXAMPLE}")
   message(FATAL_ERROR "Planning example is unavailable")
+endif()
+string(ASCII 206 169 omega)
+set(unicode_dir "${CMAKE_CURRENT_BINARY_DIR}/foundry-path-${omega}")
+file(MAKE_DIRECTORY "${unicode_dir}")
+file(COPY "${FOUNDRY_EXAMPLE}" DESTINATION "${unicode_dir}")
+get_filename_component(unicode_name "${FOUNDRY_EXAMPLE}" NAME)
+execute_process(COMMAND "${FOUNDRY}" plan "${unicode_dir}/${unicode_name}"
+  RESULT_VARIABLE unicode_code OUTPUT_VARIABLE unicode_output ERROR_VARIABLE unicode_error)
+if(NOT unicode_code EQUAL 0 AND NOT unicode_code EQUAL 3)
+  message(FATAL_ERROR "UTF-8 command-line request path failed: ${unicode_code} ${unicode_error}")
+endif()
+string(JSON unicode_accepted ERROR_VARIABLE unicode_json_error GET "${unicode_output}" admission accepted)
+if(unicode_json_error)
+  message(FATAL_ERROR "UTF-8 command-line request did not emit a plan: ${unicode_json_error}")
 endif()
 foreach(command IN ITEMS plan validate)
   execute_process(COMMAND "${FOUNDRY}" "${command}" "${FOUNDRY_EXAMPLE}"

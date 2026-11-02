@@ -76,9 +76,10 @@ runtime evidence.
 
 The native foundry_shell target provides the same bounded local lens as a
 Windows Win32/GDI window and a Linux X11 window when the X11 development
-package is present. It owns window lifecycle and presentation only. Use
-foundry_shell --document REQUEST.json to inspect a local document; it never
-launches training or creates a Hub connection. Both native backends carry the
+package is present. Use foundry_shell --document REQUEST.json to inspect a
+local document; selecting a file does not launch training or create a Hub
+connection. Windows Run controls can explicitly route to a configured retained
+owner, as described below. Both native backends carry the
 terminal-ready IDA CLI presentation atlas and animate its local WALK poses as
 a visual companion; that animation is not model, run, or Hub evidence. The
 optional `foundry_shell --simulate` mode adds a deterministic execution
@@ -87,6 +88,11 @@ checkpoint stages with clearly marked simulated values. It is an explorable
 teaching surface, not a trainer or a receipt generator.
 
 ## Native shell quick start
+
+For optional Windows local Run/status/cancel wiring, see the
+[local owner contract](docs/local-owner.md). Its build option is off by default
+pending containment and runtime acceptance; the existing native and governed
+worker paths keep their established contracts.
 
 The native shell has two presentation backends. Choose the instructions for
 the operating system where the shell will run.

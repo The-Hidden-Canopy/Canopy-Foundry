@@ -26,6 +26,12 @@ const char* simulation_stage_name(SimulationStage stage) noexcept {
     return "IDLE";
 }
 
+const char* simulation_status_name(const SimulationState& state) noexcept {
+    if (state.completed) return "COMPLETE";
+    if (!state.active) return "READY";
+    return state.paused ? "PAUSED" : "RUNNING";
+}
+
 void start_simulation(SimulationState& state) noexcept {
     state = {};
     state.active = true;

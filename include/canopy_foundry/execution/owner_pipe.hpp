@@ -19,8 +19,8 @@ struct OwnerEndpoint {
 enum class OwnerCommand { current, status, cancel };
 enum class OwnerServeResult { handled, timeout, error };
 
-// No production code creates this transport until the containment and runtime
-// gates pass. One owner serially serves a retained LocalRunService; the service
+// The opt-in local owner requires containment acceptance and a pinned runtime.
+// One owner serially serves a retained LocalRunService; the service
 // and its owned backend must outlive this pipe. Never use it for Hub authority.
 class OwnerPipe {
 public:
@@ -62,13 +62,14 @@ LocalOperationResult owner_file_start(const std::filesystem::path& file,
                                        const std::filesystem::path& request,
                                        std::chrono::milliseconds timeout);
 
-// Host-side bootstrap: a future owner process keeps this object alive and
+// Host-side bootstrap: the foreground owner keeps this object alive and
 // repeatedly calls serve_once. open() publishes an endpoint before accepting
 // work, so a lost start response can be reconciled via OwnerCommand::current.
 // No backend is installed by default and this class never launches a daemon.
 class OwnerHost {
 public:
-    explicit OwnerHost(std::unique_ptr<OwnedRunBackend> backend = {});
+    explicit OwnerHost(std::unique_ptr<OwnedRunBackend> backend = {},
+                       RuntimeCapabilities capabilities = build_capabilities());
     bool open(const std::filesystem::path& endpoint_file, std::string& error);
     OwnerServeResult serve_once(std::chrono::milliseconds timeout, std::string& error);
     LocalOperationResult current();

@@ -32,8 +32,12 @@ bool CheckpointGeneration::complete_for(CheckpointPurpose purpose) const noexcep
         (!data_cursor_sha256.empty() && !sha256(data_cursor_sha256))) {
         return false;
     }
-    if (purpose == CheckpointPurpose::ModelExport) return true;
-    return sha256(optimizer_sha256) && sha256(data_cursor_sha256);
+    switch (purpose) {
+    case CheckpointPurpose::ModelExport: return true;
+    case CheckpointPurpose::ExactResume:
+        return sha256(optimizer_sha256) && sha256(data_cursor_sha256);
+    }
+    return false;
 }
 
 CheckpointValidation validate_checkpoint_generation(

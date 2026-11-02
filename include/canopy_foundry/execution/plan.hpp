@@ -86,6 +86,8 @@ struct ExecutionPlan {
 struct PlanResolution {
     ExecutionPlan plan;
     RuntimeCapabilities capabilities;
+    // Owner-local admission snapshot; not serialized into the public plan.
+    std::string local_source_request_bytes;
 };
 
 PlanResolution resolve_execution_plan(

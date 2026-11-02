@@ -29,6 +29,10 @@ const SchedulerWorkspace& SchedulerWorkspaceCache::require(
     if (!key.valid()) {
         throw SchedulerWorkspaceError("invalid scheduler workspace key");
     }
+    if (retired_before_.valid() && key.route_generation < retired_before_) {
+        ++stats_.stale_rejections;
+        throw SchedulerWorkspaceError("scheduler route generation has been retired");
+    }
 
     const auto found = workspaces_.find(key);
     if (found != workspaces_.end()) {
@@ -47,6 +51,10 @@ const SchedulerWorkspace& SchedulerWorkspaceCache::require(
     }
 
     SchedulerWorkspace rebuilt = builder(key);
+    if (retired_before_.valid() && key.route_generation < retired_before_) {
+        ++stats_.stale_rejections;
+        throw SchedulerWorkspaceError("scheduler route generation was retired during rebuild");
+    }
     if (!rebuilt.valid_for(key)) {
         ++stats_.stale_rejections;
         throw SchedulerWorkspaceError(
@@ -66,6 +74,11 @@ void SchedulerWorkspaceCache::invalidate_route(RouteGeneration new_generation) {
         throw SchedulerWorkspaceError(
             "scheduler invalidation requires a non-zero route generation");
     }
+    if (retired_before_.valid() && new_generation < retired_before_) {
+        ++stats_.stale_rejections;
+        throw SchedulerWorkspaceError("scheduler invalidation generation moved backwards");
+    }
+    retired_before_ = new_generation;
 
     for (auto it = workspaces_.begin(); it != workspaces_.end();) {
         if (it->first.route_generation != new_generation) {
@@ -80,6 +93,11 @@ void SchedulerWorkspaceCache::invalidate_route(RouteGeneration new_generation) {
 void SchedulerWorkspaceCache::invalidate_all() {
     stats_.invalidations += workspaces_.size();
     workspaces_.clear();
+}
+
+void SchedulerWorkspaceCache::reset_for_new_model() {
+    invalidate_all();
+    retired_before_ = {};
 }
 
 }  // namespace canopy_foundry

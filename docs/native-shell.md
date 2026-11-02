@@ -72,12 +72,21 @@ Hub, or expose a network endpoint. The frontend directory is installed beside
 the binary as a static asset so the shell can verify its local presentation
 surface without depending on a browser service.
 
+Windows Run, Refresh status and Cancel can explicitly route to the
+[optional retained local owner](local-owner.md) through
+`CANOPY_FOUNDRY_OWNER_ENDPOINT`. The owner is an opt-in build candidate and
+retains the trainer handles and artifacts; the shell never owns a trainer
+directly. No endpoint is inferred from a selected document or Hub request.
+
 The keyboard controls are shared by both native backends:
 
 - `S` starts or restarts the execution theater.
 - `P` or `Space` pauses/resumes it.
 - `R` resets it.
 - `1`–`5` select the existing inspection views.
+
+The walkthrough displays READY, RUNNING, PAUSED, or COMPLETE as text. These
+labels describe the simulation only; they are not training or runtime states.
 
 The simulation is intentionally synthetic on Windows and Linux. It is an
 instructional visualization of request, plan, route, execute, and checkpoint
@@ -87,11 +96,21 @@ stages; it is not a training run, checkpoint, Hub job, or execution receipt.
 
 `frontend/assets/ida-cli-sprite.json` is a generated, terminal-ready atlas
 containing the IDA and multi-pose WALK sets used by the Ask IDA CLI's local
-opening. The native shell prefers WALK, holds each pose for six animation
-ticks, and falls back to the single IDA pose when a reduced atlas is supplied.
-Windows and X11 render the same quadrant masks and palette through their native
+opening. The native shell prefers WALK and holds each selected pose for six
+animation ticks. The bundled presentation sequence uses its idle and walk
+poses, preserving the run and dash frames for other uses; older atlases without
+the sequence play all their frames. A reduced atlas can fall back to IDA.
+Windows and X11 restore the terminal-cell aspect ratio while fitting the same
+quadrant masks and palette through their native
 painting APIs; no terminal, WebView, image library, model runtime, or network
 connection is required.
+
+The optional native RGBA pose retains 256 x 256 full-colour pixels and alpha
+independently of terminal quadrant compression. The source is a newly generated
+1254 x 1254 interpretation of the established IDA reference, reduced to 256 x
+256; the original sheet's 50 x 58 cells remain available in the terminal atlas.
+One idle pose uses subtle movement rather than alternating dissimilar source
+actions. The native card fits the window and the original atlas is the fallback.
 
 The atlas is presentation-only. The shell deliberately does not use its frame
 state to infer model availability, execution progress, receipt validity, or Hub

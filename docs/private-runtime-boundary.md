@@ -41,6 +41,36 @@ The generic MoE contract does not claim Qwen-MoE always-on shared-expert
 support. A local model or checkpoint binding may include its contract ID and
 digest, but model bytes remain on the machine running the trainer.
 
+An architecture-workbench graph package is not a native tensor checkpoint.
+Even a SafeTensors file needs the matching architecture, tensor layout, and
+parent binding. Do not relabel a graph package or foreign optimizer state with
+an existing contract ID to get it through admission. Legacy requests without
+an explicit model contract retain the established dense default; explicit
+unsupported layouts are rejected by both Python admission and the worker.
+
+## Advanced runtime integration checks
+
+The public catalog describes the public CUDA and portable smoke contracts.
+A newer engine's formats, kernels, or measurements do not extend that catalog
+automatically. An operator-configured adapter is a separate execution path:
+
+1. Configure the local adapter through
+   `NEURAL_FORGE_PRIVATE_ADAPTER_MODULE`. The worker checks the complete
+   callable interface, including `prepare_local_execution`; a caller cannot
+   select a module through a job or deployment map.
+2. Match the descriptor, source and recipe attestations, package digest,
+   approved binary hash, model contract, and local asset bindings. A module
+   being importable does not establish that these deployment inputs exist.
+3. Validate actual execution, completed optimizer updates, checkpoint/resume,
+   and evaluation separately. Preserve failed or unknown outcomes. Compare
+   performance only for matched workload, hardware, precision roles, and
+   timing scope; measurements from another engine are not Foundry receipts.
+
+For local inspection, load the native `foundry capabilities` JSON output into
+the console's Capabilities view. It displays the selected document's states
+and evidence tiers, not a live device probe. The public catalog can also be
+loaded, but catalog membership does not attest a local binary or execution.
+
 ## Retry and idempotency
 
 The Hub uses an opaque worker operation ID and compare-and-swap receipt. The

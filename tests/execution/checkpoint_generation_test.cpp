@@ -32,6 +32,10 @@ int main() {
                  "checkpoint purpose name changed")) return 1;
 
     const auto candidate = exact_generation();
+    const auto unknown_purpose = static_cast<CheckpointPurpose>(99);
+    if (!require(!candidate.complete_for(unknown_purpose) &&
+                     !validate_checkpoint_generation(candidate, unknown_purpose).valid,
+                 "unknown checkpoint purpose was accepted")) return 1;
     if (!require(candidate.complete_for(CheckpointPurpose::ModelExport),
                  "complete model export generation was rejected")) return 1;
     if (!require(candidate.complete_for(CheckpointPurpose::ExactResume),

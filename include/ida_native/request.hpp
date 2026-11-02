@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -264,5 +265,10 @@ struct NativeRequest {
 };
 
 NativeRequest load_request(const std::filesystem::path& path);
+// Also return the exact file bytes used for parsing, including CRLF.
+NativeRequest load_request(const std::filesystem::path& path, std::string& source_bytes);
+// Reject oversized source while reading; existing load_request remains unbounded.
+NativeRequest load_request_bounded(const std::filesystem::path& path, std::string& source_bytes,
+                                   std::size_t maximum_bytes);
 
 }  // namespace ida_native

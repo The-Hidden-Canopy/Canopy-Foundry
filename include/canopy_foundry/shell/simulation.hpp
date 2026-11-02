@@ -32,6 +32,8 @@ struct SimulationState {
 };
 
 [[nodiscard]] const char* simulation_stage_name(SimulationStage stage) noexcept;
+// Presentation state for the synthetic walkthrough, not a runtime status.
+[[nodiscard]] const char* simulation_status_name(const SimulationState& state) noexcept;
 
 void start_simulation(SimulationState& state) noexcept;
 void reset_simulation(SimulationState& state) noexcept;

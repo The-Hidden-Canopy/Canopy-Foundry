@@ -38,6 +38,11 @@ int main() {
     if (!require(activation_policy_name(ActivationPolicy::Recompute) == "recompute",
                  "activation policy name changed")) return 1;
 
+    bool unknown_policy_rejected = false;
+    try { (void)ForwardTape({7}, 9, static_cast<ActivationPolicy>(99)); }
+    catch (const ForwardTapeError&) { unknown_policy_rejected = true; }
+    if (!require(unknown_policy_rejected, "unknown activation policy was accepted")) return 1;
+
     RoutePlanStore routes;
     (void)routes.publish(route_plan());
 

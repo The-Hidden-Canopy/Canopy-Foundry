@@ -155,6 +155,78 @@ std::vector<SpriteCell> parse_row(std::string_view row) {
 
 using SpriteFrameList = std::vector<SpriteFrame>;
 
+bool parse_native_frames(const json& entry, std::vector<NativeSpriteFrame>& output) {
+    if (!entry.is_object() || !entry.contains("width") || !entry.contains("height") ||
+        !entry.contains("frames")) return false;
+    auto dimension = [](const json& value) -> int {
+        if (value.is_number_unsigned()) {
+            const auto n = value.get<std::uint64_t>();
+            return n > 0 && n <= 256 ? static_cast<int>(n) : 0;
+        }
+        if (value.is_number_integer()) {
+            const auto n = value.get<std::int64_t>();
+            return n > 0 && n <= 256 ? static_cast<int>(n) : 0;
+        }
+        return 0;
+    };
+    const int width = dimension(entry.at("width"));
+    const int height = dimension(entry.at("height"));
+    const auto& frames = entry.at("frames");
+    if (!width || !height || !frames.is_array() || frames.empty() || frames.size() > 16) return false;
+    auto nibble = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    std::vector<NativeSpriteFrame> parsed;
+    for (const auto& rows : frames) {
+        if (!rows.is_array() || rows.size() != static_cast<std::size_t>(height)) return false;
+        NativeSpriteFrame frame;
+        frame.width = width;
+        frame.height = height;
+        frame.pixels.reserve(static_cast<std::size_t>(width * height));
+        for (const auto& raw_row : rows) {
+            if (!raw_row.is_string()) return false;
+            const auto& row = raw_row.get_ref<const std::string&>();
+            if (row.size() != static_cast<std::size_t>(width * 8)) return false;
+            for (int x = 0; x < width; ++x) {
+                int channels[4]{};
+                for (int c = 0; c < 4; ++c) {
+                    const auto offset = static_cast<std::size_t>(x * 8 + c * 2);
+                    const int high = nibble(row[offset]);
+                    const int low = nibble(row[offset + 1]);
+                    if (high < 0 || low < 0) return false;
+                    channels[c] = high * 16 + low;
+                }
+                frame.pixels.push_back({static_cast<std::uint8_t>(channels[0]),
+                    static_cast<std::uint8_t>(channels[1]), static_cast<std::uint8_t>(channels[2]),
+                    static_cast<std::uint8_t>(channels[3])});
+            }
+        }
+        parsed.push_back(std::move(frame));
+    }
+    // Keep one aligned viewport across poses. Ignore tiny alpha noise at the
+    // edges, and retain a few pixels of padding around real artwork.
+    int left = width, top = height, right = 0, bottom = 0;
+    for (const auto& frame : parsed) {
+        for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
+            if (frame.pixels[static_cast<std::size_t>(y * width + x)].alpha < 8) continue;
+            left = std::min(left, x); top = std::min(top, y);
+            right = std::max(right, x + 1); bottom = std::max(bottom, y + 1);
+        }
+    }
+    if (right <= left || bottom <= top) return false;
+    left = std::max(0, left - 4); top = std::max(0, top - 4);
+    right = std::min(width, right + 4); bottom = std::min(height, bottom + 4);
+    for (auto& frame : parsed) {
+        frame.view_left = left; frame.view_top = top;
+        frame.view_width = right - left; frame.view_height = bottom - top;
+    }
+    output = std::move(parsed);
+    return true;
+}
+
 bool parse_entry(const json& entry, SpriteFrameList& output, std::string& error) {
     if (!entry.is_object() || !entry.contains("frames") || !entry["frames"].is_array()) {
         error = "sprite set has no frame array";
@@ -238,8 +310,32 @@ bool load_ida_sprite_sheet(
         if (!root.contains(name)) continue;
         SpriteFrameList frames;
         if (parse_entry(root.at(name), frames, parse_error) && !frames.empty()) {
+            std::vector<std::size_t> sequence;
+            const auto& entry = root.at(name);
+            if (entry.contains("presentation_frames")) {
+                const auto& raw = entry.at("presentation_frames");
+                if (!raw.is_array() || raw.empty()) {
+                    parse_error = "presentation_frames must be a non-empty array";
+                    continue;
+                }
+                bool valid = true;
+                for (const auto& item : raw) {
+                    if (!item.is_number_unsigned() && !item.is_number_integer()) { valid = false; break; }
+                    if (item.is_number_unsigned()) {
+                        const auto index = item.get<std::uint64_t>();
+                        if (index >= frames.size()) { valid = false; break; }
+                        sequence.push_back(static_cast<std::size_t>(index));
+                    } else {
+                        const auto index = item.get<std::int64_t>();
+                        if (index < 0 || static_cast<std::uint64_t>(index) >= frames.size()) { valid = false; break; }
+                        sequence.push_back(static_cast<std::size_t>(index));
+                    }
+                }
+                if (!valid) { parse_error = "invalid presentation frame index"; continue; }
+            }
             candidate.set_name = name;
             candidate.frames = std::move(frames);
+            candidate.presentation_frames = std::move(sequence);
             selected = name;
             break;
         }
@@ -254,6 +350,10 @@ bool load_ida_sprite_sheet(
     }
 
     candidate.loaded = true;
+    if (root.contains("NATIVE_RGBA")) {
+        // A malformed optional native atlas must not break the legacy fallback.
+        (void)parse_native_frames(root.at("NATIVE_RGBA"), candidate.native_frames);
+    }
     candidate.error.clear();
     sheet = std::move(candidate);
     error.clear();
@@ -266,14 +366,62 @@ const SpriteFrame* sprite_frame_at(
 ) noexcept {
     if (!sheet.loaded || sheet.frames.empty()) return nullptr;
     const auto hold = static_cast<std::uint64_t>(std::max(1, sheet.frame_hold_ticks));
-    const auto index = (animation_tick / hold) % sheet.frames.size();
+    const auto count = sheet.presentation_frames.empty() ? sheet.frames.size() : sheet.presentation_frames.size();
+    const auto position = (animation_tick / hold) % count;
+    const auto index = sheet.presentation_frames.empty() ? position : sheet.presentation_frames[position];
+    if (index >= sheet.frames.size()) return nullptr;
     return &sheet.frames[static_cast<std::size_t>(index)];
+}
+
+const NativeSpriteFrame* native_sprite_frame_at(const SpriteSheet& sheet, std::uint64_t tick) noexcept {
+    if (!sheet.loaded || sheet.frames.empty() || sheet.native_frames.empty()) return nullptr;
+    if (sheet.native_frames.size() == 1) return &sheet.native_frames.front();
+    const auto hold = static_cast<std::uint64_t>(std::max(1, sheet.frame_hold_ticks));
+    const auto count = sheet.presentation_frames.empty() ? sheet.frames.size() : sheet.presentation_frames.size();
+    const auto position = (tick / hold) % count;
+    const auto index = sheet.presentation_frames.empty() ? position : sheet.presentation_frames[position];
+    return index < sheet.native_frames.size() ? &sheet.native_frames[index] : nullptr;
+}
+
+SpriteSize fit_native_sprite(const NativeSpriteFrame& frame, int width, int height) noexcept {
+    if (frame.view_width <= 0 || frame.view_height <= 0 || width <= 0 || height <= 0) return {};
+    const auto w = static_cast<std::int64_t>(frame.view_width);
+    const auto h = static_cast<std::int64_t>(frame.view_height);
+    if (static_cast<std::int64_t>(width) * h <= static_cast<std::int64_t>(height) * w)
+        return {width, std::max(1, static_cast<int>(width * h / w))};
+    return {std::max(1, static_cast<int>(height * w / h)), height};
+}
+
+SpriteSize companion_card_size(int content_width) noexcept {
+    const int width = std::clamp(content_width - 560, 224, 320);
+    return {width, width - 16};
+}
+
+SpriteSize fit_sprite(const SpriteFrame& frame, int width, int height) noexcept {
+    if (frame.width <= 0 || frame.height <= 0 || width <= 0 || height <= 0) return {};
+    const auto natural_width = static_cast<std::int64_t>(frame.width);
+    const auto natural_height = static_cast<std::int64_t>(frame.height) * 2;
+    if (static_cast<std::int64_t>(width) * natural_height <=
+        static_cast<std::int64_t>(height) * natural_width) {
+        return {width, std::max(1, static_cast<int>(width * natural_height / natural_width))};
+    }
+    return {std::max(1, static_cast<int>(height * natural_width / natural_height)), height};
 }
 
 int sprite_breathe_offset(std::uint64_t animation_tick) noexcept {
     const int phase = static_cast<int>(animation_tick % 12);
     if (phase <= 6) return phase / 3;
     return (12 - phase) / 3;
+}
+
+bool sprite_visual_changes(const SpriteSheet& sheet, std::uint64_t before,
+                           std::uint64_t after) noexcept {
+    const auto* old_frame = sprite_frame_at(sheet, before);
+    const auto* new_frame = sprite_frame_at(sheet, after);
+    if (old_frame != new_frame) return true;
+    if (!new_frame) return false;
+    return native_sprite_frame_at(sheet, before) != native_sprite_frame_at(sheet, after) ||
+           sprite_breathe_offset(before) != sprite_breathe_offset(after);
 }
 
 }  // namespace canopy_foundry::shell

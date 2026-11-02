@@ -4,6 +4,17 @@
 
 namespace canopy_foundry {
 
+namespace {
+bool valid_activation_policy(ActivationPolicy policy) noexcept {
+    switch (policy) {
+    case ActivationPolicy::Resident:
+    case ActivationPolicy::Recompute:
+    case ActivationPolicy::HostPinnedLayerBody: return true;
+    }
+    return false;
+}
+}
+
 std::string_view activation_policy_name(ActivationPolicy policy) noexcept {
     switch (policy) {
     case ActivationPolicy::Resident: return "resident";
@@ -35,6 +46,9 @@ ForwardTape::ForwardTape(
     if (!model_generation_.valid()) {
         throw ForwardTapeError("forward tape requires a non-zero model generation");
     }
+    if (!valid_activation_policy(activation_policy_)) {
+        throw ForwardTapeError("forward tape activation policy is unknown");
+    }
 }
 
 void ForwardTape::append_layer(LayerForwardTape layer) {
@@ -63,7 +77,7 @@ void ForwardTape::seal() {
 }
 
 bool ForwardTape::valid() const noexcept {
-    if (!model_generation_.valid() || layers_.empty()) return false;
+    if (!model_generation_.valid() || !valid_activation_policy(activation_policy_) || layers_.empty()) return false;
     for (std::size_t index = 0; index < layers_.size(); ++index) {
         if (!layers_[index].valid_for(static_cast<std::uint32_t>(index))) {
             return false;

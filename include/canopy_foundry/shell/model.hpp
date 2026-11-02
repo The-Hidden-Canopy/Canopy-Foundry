@@ -6,6 +6,8 @@
 #include <filesystem>
 #include <string>
 
+namespace canopy_foundry { struct LocalOperationResult; }
+
 namespace canopy_foundry::shell {
 
 enum class View {
@@ -83,6 +85,8 @@ inline void switch_workspace_mode(ShellState& state, WorkspaceMode mode) noexcep
 void resolve_selected_request(ShellState& state);
 void inspect_selected_resume(ShellState& state);
 void check_selected_run(ShellState& state);
+// Apply a start observation; uncertain outcomes require current-owner reconciliation.
+void apply_start_result(ShellState& state, const LocalOperationResult& result);
 void start_selected_run(ShellState& state);
 void refresh_selected_run(ShellState& state);
 void cancel_selected_run(ShellState& state);

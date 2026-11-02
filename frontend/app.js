@@ -40,16 +40,50 @@ const exampleDocument = {
   runtime_verification_required: true,
 };
 
-const capabilityRows = [
-  { name: "backend.cuda", state: "cataloged", evidence: "public catalog", tone: "teal", note: "Build/profile surface; machine verification remains separate." },
-  { name: "backend.opencl", state: "disabled", evidence: "public catalog", tone: "muted", note: "No silent fallback from a CUDA request." },
-  { name: "precision.bf16", state: "contract", evidence: "planner-tested", tone: "teal", note: "Role mapping is explicit; execution still needs a runtime." },
-  { name: "precision.nvfp4", state: "experimental", evidence: "contract surface", tone: "amber", note: "Presence of a name is not hardware evidence." },
-  { name: "moe.route_plan", state: "contract", evidence: "unit-tested", tone: "teal", note: "Forward-owned route identity is available to the planner." },
-  { name: "moe.compact_scheduler", state: "experimental", evidence: "design boundary", tone: "amber", note: "Not promoted by this frontend." },
-  { name: "parallel.host_staged", state: "contract", evidence: "planner surface", tone: "teal", note: "Transport choice must be resolved explicitly." },
-  { name: "checkpoint.generation", state: "contract", evidence: "unit-tested", tone: "teal", note: "Torn generations must fail closed." },
-];
+function capabilityViewForDocument(doc, source) {
+  const empty = { rows: [], label: "NO INVENTORY", note: "Select a native capability inventory or public catalog. A request or example does not establish available capabilities." };
+  if (source !== "file") return empty;
+  const schema = doc.schema ?? doc.schema_version;
+  const invalid = { rows: [], label: "INVALID INVENTORY", note: "The selected inventory has an invalid shape. No capability claims are displayed." };
+  if (schema === "canopy-foundry-runtime-capabilities.v1") {
+    const states = ["AVAILABLE", "UNAVAILABLE", "EXPERIMENTAL", "BUILD_DISABLED", "HARDWARE_UNSUPPORTED", "RUNTIME_UNVERIFIED"];
+    const tiers = ["SOURCE_ONLY", "UNIT_VERIFIED", "HARDWARE_OBSERVED", "BURN_OBSERVED", "PROMOTION_ELIGIBLE"];
+    if (!Array.isArray(doc.capabilities)) return invalid;
+    const ids = new Set();
+    const rows = [];
+    for (const entry of doc.capabilities) {
+      if (!entry || typeof entry.id !== "string" || !entry.id.trim() || ids.has(entry.id) ||
+          !states.includes(entry.state) || typeof entry.evidence !== "string" ||
+          (entry.evidence_tier !== undefined && !tiers.includes(entry.evidence_tier))) return invalid;
+      ids.add(entry.id);
+      rows.push({
+        name: entry.id,
+        state: entry.state,
+        evidence: "claimed " + (entry.evidence_tier ?? "tier unreported") + " · " + entry.evidence,
+        tone: ["UNAVAILABLE", "BUILD_DISABLED", "HARDWARE_UNSUPPORTED"].includes(entry.state) ? "muted" : "amber",
+        note: "Selected document claim; this console does not independently verify runtime or hardware evidence.",
+      });
+    }
+    return { rows, label: "LOCAL INVENTORY", note: "Source claimed by document: " + (typeof doc.source === "string" ? doc.source : "unreported") + ". " + rows.length + " entries; no machine verification performed." };
+  }
+  if (schema === "neural-foundry-capability-catalog.v1") {
+    if (!doc.profiles || typeof doc.profiles !== "object" || Array.isArray(doc.profiles)) return invalid;
+    const rows = [];
+    for (const [id, profile] of Object.entries(doc.profiles)) {
+      if (!id.trim() || !profile || typeof profile.backend !== "string" || !profile.backend.trim() ||
+          (profile.enabled !== undefined && typeof profile.enabled !== "boolean")) return invalid;
+      rows.push({
+        name: id,
+        state: profile.enabled === false ? "disabled" : "cataloged",
+        evidence: "catalog only",
+        tone: profile.enabled === false ? "muted" : "amber",
+        note: "Backend: " + profile.backend + ". Catalog membership does not verify a local binary, device, or run.",
+      });
+    }
+    return { rows, label: "LOCAL CATALOG", note: "Catalog version: " + (typeof doc.catalog_version === "string" ? doc.catalog_version : "unreported") + ". " + rows.length + " profiles; no machine verification performed." };
+  }
+  return empty;
+}
 
 const evidenceStages = [
   ["Requested", "operator input", "current"],
@@ -155,6 +189,7 @@ function renderDocument() {
       : "Ready · select a local JSON document or inspect the example contract.");
   const json = document.getElementById("request-json");
   if (json) json.textContent = JSON.stringify(doc, null, 2);
+  renderCapabilities();
 
   renderFacts("request-facts", [
     ["schema", valueAt(doc, ["schema", "schema_version"])],
@@ -202,7 +237,10 @@ function renderCapabilities() {
   const container = document.getElementById("capability-rows");
   if (!container) return;
   container.replaceChildren();
-  capabilityRows.forEach((item) => {
+  const inventory = capabilityViewForDocument(currentDocument(), appState.source);
+  text("capability-state-tag", inventory.label);
+  text("capability-source-note", inventory.note);
+  inventory.rows.forEach((item) => {
     const row = document.createElement("div");
     row.className = "capability-row";
     const name = document.createElement("span");
@@ -279,7 +317,7 @@ async function loadSelectedFile() {
     appState.documentType = classifyDocument(parsed);
     appState.source = "file";
     renderDocument();
-    switchView("plan");
+    switchView(appState.documentType === "capability inventory" ? "capabilities" : "plan");
   } catch (error) {
     text("footer-message", "Rejected · could not read " + file.name + ": " + error.message);
     input.value = "";
@@ -323,7 +361,6 @@ function bindEvents() {
 }
 
 bindEvents();
-renderCapabilities();
 renderEvidence();
 renderDocument();
 updateClock();

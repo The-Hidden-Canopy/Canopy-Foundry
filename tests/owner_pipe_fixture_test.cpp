@@ -4,6 +4,7 @@
 #endif
 #include <cassert>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -15,6 +16,14 @@
 // actual production process containment is established by this test.
 namespace ida_native {
 NativeRequest load_request(const std::filesystem::path&) { return {}; }
+NativeRequest load_request(const std::filesystem::path& path, std::string& source_bytes) {
+    source_bytes = "synthetic request";
+    return load_request(path);
+}
+NativeRequest load_request_bounded(const std::filesystem::path& path, std::string& source_bytes, std::size_t maximum_bytes) {
+    assert(maximum_bytes == (2u << 20));
+    return load_request(path, source_bytes);
+}
 }
 namespace canopy_foundry {
 RuntimeCapabilities RuntimeCapabilities::from_build(bool, bool, bool) { return {}; }
@@ -77,6 +86,10 @@ int wmain(int argc, wchar_t** argv) {
     using namespace canopy_foundry;
     if (argc == 5 && std::wstring(argv[1]) == L"--client") {
         const std::wstring command(argv[3]);
+        if (command == L"current-env") {
+            const auto result = status_local_run("");
+            return result.exit_code == 0 && result.run_id == "fixture-1" && !result.job_stopped ? 0 : 1;
+        }
         const bool cancel = command == L"cancel";
         const bool current = command == L"current" || command == L"current-stopped";
         if (command == L"wrong-owner") {
@@ -96,7 +109,7 @@ int wmain(int argc, wchar_t** argv) {
     assert(argc == 2);
     const auto fixture_directory = std::filesystem::absolute(argv[1]);
     std::filesystem::create_directories(fixture_directory);
-    const auto endpoint_file = fixture_directory / (L"owner-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
+    const auto endpoint_file = fixture_directory / (L"owner-\x03a9-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
                                                     std::to_wstring(GetTickCount64()) + L".json");
     const auto request_file = fixture_directory / L"synthetic-request.json";
     OwnerHost host(std::make_unique<FakeOwner>());
@@ -111,6 +124,14 @@ int wmain(int argc, wchar_t** argv) {
     run_child(host, endpoint_file, request_file, L"start");
     assert(!host.may_shutdown());
     run_child(host, endpoint_file, request_file, L"current");
+    assert(SetEnvironmentVariableW(L"CANOPY_FOUNDRY_OWNER_ENDPOINT", endpoint_file.c_str()));
+    run_child(host, endpoint_file, request_file, L"current-env");
+    assert(SetEnvironmentVariableW(L"CANOPY_FOUNDRY_OWNER_ENDPOINT", nullptr));
+    // No host is serving here: Check Run must stay a client-only check.
+    assert(_wputenv_s(L"CANOPY_FOUNDRY_OWNER_ENDPOINT", endpoint_file.c_str()) == 0);
+    const auto check = check_local_run(request_file);
+    assert(check.exit_code == 4 && check.message.find("configured owner has not been checked") != std::string::npos);
+    assert(_wputenv_s(L"CANOPY_FOUNDRY_OWNER_ENDPOINT", L"") == 0);
     run_child(host, endpoint_file, request_file, L"status");
     run_child(host, endpoint_file, request_file, L"cancel");
     assert(host.may_shutdown());

@@ -84,6 +84,7 @@ add_executable(foundry_checkpoint_inspection_test
   ../tests/checkpoint_inspection_test.cpp ../src/execution/checkpoint_inspection.cpp)
 target_compile_features(foundry_checkpoint_inspection_test PRIVATE cxx_std_20)
 target_include_directories(foundry_checkpoint_inspection_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(foundry_checkpoint_inspection_test PRIVATE nlohmann_json::nlohmann_json)
 add_test(NAME foundry_checkpoint_inspection COMMAND foundry_checkpoint_inspection_test
   ${CMAKE_CURRENT_BINARY_DIR}/checkpoint-inspection-test-fixture)
 
@@ -102,6 +103,7 @@ add_executable(foundry_shell_plan_service_contract_test
 )
 target_compile_features(foundry_shell_plan_service_contract_test PRIVATE cxx_std_20)
 target_include_directories(foundry_shell_plan_service_contract_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(foundry_shell_plan_service_contract_test PRIVATE nlohmann_json::nlohmann_json)
 add_test(NAME foundry_shell_plan_service_contract COMMAND foundry_shell_plan_service_contract_test)
 
 if(WIN32)
@@ -110,6 +112,8 @@ if(WIN32)
     ../src/execution/service.cpp
     ../src/execution/owner_pipe.cpp)
   target_compile_features(foundry_owner_pipe_fixture_test PRIVATE cxx_std_20)
+  # The fixture explicitly exercises transport independently of the product option.
+  target_compile_definitions(foundry_owner_pipe_fixture_test PRIVATE CANOPY_FOUNDRY_LOCAL_OWNER_TRANSPORT=1)
   target_include_directories(foundry_owner_pipe_fixture_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
   target_link_libraries(foundry_owner_pipe_fixture_test PRIVATE nlohmann_json::nlohmann_json advapi32 bcrypt)
   if(MINGW)

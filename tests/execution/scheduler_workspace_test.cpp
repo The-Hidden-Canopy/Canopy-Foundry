@@ -85,5 +85,40 @@ int main() {
                  "invalid scheduler workspace was accepted")) return 1;
     if (!require(cache.stats().stale_rejections == 1,
                  "invalid scheduler workspace evidence changed unexpectedly")) return 1;
+
+    SchedulerWorkspaceCache retired;
+    (void)retired.require(key({1}), builder);
+    (void)retired.require(key({2}), builder);
+    retired.invalidate_route({2});
+    const int before_stale = builder_calls;
+    bool old_route_rejected = false;
+    try { (void)retired.require(key({1}), builder); }
+    catch (const SchedulerWorkspaceError&) { old_route_rejected = true; }
+    if (!require(old_route_rejected && builder_calls == before_stale,
+                 "retired route was rebuilt")) return 1;
+    (void)retired.require(key({3}), builder); // later pipeline work may coexist
+    if (!require(retired.size() == 2, "later route displaced an in-flight current route")) return 1;
+    retired.invalidate_all();
+    bool stale_after_clear = false;
+    try { (void)retired.require(key({1}), builder); }
+    catch (const SchedulerWorkspaceError&) { stale_after_clear = true; }
+    if (!require(stale_after_clear, "clear forgot the retired route floor")) return 1;
+    bool rollback_rejected = false;
+    try { retired.invalidate_route({1}); }
+    catch (const SchedulerWorkspaceError&) { rollback_rejected = true; }
+    if (!require(rollback_rejected, "route invalidation moved backwards")) return 1;
+    retired.reset_for_new_model();
+    (void)retired.require(key({1}), builder);
+
+    SchedulerWorkspaceCache reentrant;
+    bool superseded_rejected = false;
+    try {
+        (void)reentrant.require(key({1}), [&reentrant, &builder](const SchedulerKey& requested) {
+            reentrant.invalidate_route({2});
+            return builder(requested);
+        });
+    } catch (const SchedulerWorkspaceError&) { superseded_rejected = true; }
+    if (!require(superseded_rejected && reentrant.size() == 0,
+                 "retired reentrant workspace was published")) return 1;
     return 0;
 }

@@ -1,6 +1,7 @@
 #include "canopy_foundry/moe/route_plan.hpp"
 
 #include <iostream>
+#include <limits>
 
 namespace {
 
@@ -92,6 +93,15 @@ int main() {
     }
     if (!require(invalid_rejected,
                  "non-forward-owned route state was promoted")) return 1;
+
+    auto bad_metric = plan(2, 5);
+    for (const double metric : {std::numeric_limits<double>::infinity(),
+                                std::numeric_limits<double>::quiet_NaN(), -0.5}) {
+        bad_metric.routing_load_cv = metric;
+        if (!require(!bad_metric.valid(), "invalid route load coefficient was accepted")) return 1;
+    }
+    bad_metric.routing_load_cv = -1.0;
+    if (!require(bad_metric.valid(), "unavailable load coefficient sentinel was rejected")) return 1;
 
     if (!require(store.stats().generation_mismatches == 1,
                  "generation mismatch evidence changed unexpectedly")) return 1;

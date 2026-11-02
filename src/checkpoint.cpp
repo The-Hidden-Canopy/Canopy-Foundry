@@ -1282,7 +1282,8 @@ bool save_pss_pred_state_safetensors(
     std::error_code ec;
     if (out_path.has_parent_path())
         std::filesystem::create_directories(out_path.parent_path(), ec);
-    const auto tmp_path = std::filesystem::path(out_path.string() + ".tmp");
+    auto tmp_path = out_path;
+    tmp_path += ".tmp";
     {
         std::ofstream out(tmp_path, std::ios::binary | std::ios::trunc);
         if (!out) {
@@ -1305,8 +1306,9 @@ bool save_pss_pred_state_safetensors(
         return false;
     }
     // Sidecar for the push/pull harness — identity without parsing safetensors.
-    write_text(std::filesystem::path(out_path.string() + ".provenance.json"),
-               meta.dump(2) + "\n");
+    auto provenance_path = out_path;
+    provenance_path += ".provenance.json";
+    write_text(provenance_path, meta.dump(2) + "\n");
     return true;
 }
 

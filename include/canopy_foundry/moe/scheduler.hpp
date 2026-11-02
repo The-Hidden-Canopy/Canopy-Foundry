@@ -74,8 +74,12 @@ public:
         const SchedulerWorkspaceBuilder& builder
     );
 
+    // Retire older routes; later routes can coexist for pipelined microsteps.
     void invalidate_route(RouteGeneration new_generation);
+    // Clear storage without forgetting the retired-generation floor.
     void invalidate_all();
+    // Only after all prior-model consumers are retired, allow route IDs to restart.
+    void reset_for_new_model();
 
     [[nodiscard]] std::size_t size() const noexcept { return workspaces_.size(); }
     [[nodiscard]] const SchedulerWorkspaceStats& stats() const noexcept {
@@ -84,6 +88,7 @@ public:
 
 private:
     std::map<SchedulerKey, SchedulerWorkspace> workspaces_;
+    RouteGeneration retired_before_{};
     SchedulerWorkspaceStats stats_{};
 };
 

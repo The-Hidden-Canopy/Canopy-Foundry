@@ -56,6 +56,50 @@ int main() {
             return 1;
         }
 
+        // JSON paths are UTF-8 even when the Windows ANSI code page is not.
+        const auto unicode_path = root / fs::u8path("asset-\xCE\xA9");
+        const auto utf8_name = unicode_path.u8string();
+        const std::string encoded_path(utf8_name.begin(), utf8_name.end());
+        json unicode_request = valid;
+        unicode_request["output_dir"] = encoded_path;
+        unicode_request["input"] = {{"token_blocks", encoded_path}};
+        write_request(request_path, unicode_request);
+        const auto unicode_loaded = ida_native::load_request(request_path);
+        if (unicode_loaded.output_dir != unicode_path || unicode_loaded.input.token_blocks != unicode_path)
+            throw std::runtime_error("UTF-8 request paths did not round-trip");
+
+        // Preserve actual CRLF bytes as parsed, independent of Windows text mode.
+        std::string windows_json;
+        for (const char ch : valid.dump(2)) {
+            if (ch == '\n') windows_json += '\r';
+            windows_json += ch;
+        }
+        windows_json += "\r\n";
+        { std::ofstream output(request_path, std::ios::binary); output << windows_json; }
+        std::string parsed_bytes;
+        (void)ida_native::load_request(request_path, parsed_bytes);
+        if (parsed_bytes != windows_json) {
+            std::cerr << "parsed request bytes were not preserved\n";
+            fs::remove_all(root);
+            return 1;
+        }
+
+        constexpr std::size_t limit = 2u << 20;
+        std::string at_limit = valid.dump();
+        at_limit.append(limit - at_limit.size(), ' ');
+        { std::ofstream output(request_path, std::ios::binary); output << at_limit; }
+        parsed_bytes.clear();
+        (void)ida_native::load_request_bounded(request_path, parsed_bytes, limit);
+        if (parsed_bytes != at_limit) throw std::runtime_error("bounded read changed an exact-limit request");
+        { std::ofstream output(request_path, std::ios::binary | std::ios::app); output << ' '; }
+        parsed_bytes = "stale";
+        bool oversized_rejected = false;
+        try { (void)ida_native::load_request_bounded(request_path, parsed_bytes, limit); }
+        catch (const std::exception&) { oversized_rejected = true; }
+        if (!oversized_rejected || !parsed_bytes.empty()) throw std::runtime_error("oversized request was not safely rejected");
+        // The established general loader retains its prior, unbounded API.
+        (void)ida_native::load_request(request_path);
+
         for (const std::string& optimizer : {"adam", "adamw"}) {
             json invalid = valid;
             invalid["optimizer_type"] = optimizer;

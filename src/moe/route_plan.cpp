@@ -1,5 +1,6 @@
 #include "canopy_foundry/moe/route_plan.hpp"
 
+#include <cmath>
 #include <utility>
 
 namespace canopy_foundry {
@@ -18,7 +19,7 @@ bool RoutePlan::valid() const noexcept {
         actual_rows < -1 || actual_rows > source_rows || active_tiles < -1) {
         return false;
     }
-    return routing_load_cv >= -1.0;
+    return std::isfinite(routing_load_cv) && (routing_load_cv == -1.0 || routing_load_cv >= 0.0);
 }
 
 const RoutePlan& RoutePlanStore::publish(RoutePlan plan) {

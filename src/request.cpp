@@ -21,21 +21,47 @@ namespace {
 
 using json = nlohmann::json;
 
+std::string path_utf8(const std::filesystem::path& path) {
+    const auto bytes = path.u8string();
+    return {bytes.begin(), bytes.end()};
+}
+
 std::string read_text(const std::filesystem::path& path) {
-    std::ifstream input(path);
+    std::ifstream input(path, std::ios::binary);
     if (!input) {
-        throw std::runtime_error("unable to open request json: " + path.string());
+        throw std::runtime_error("unable to open request json: " + path_utf8(path));
     }
     std::ostringstream buffer;
     buffer << input.rdbuf();
     return buffer.str();
 }
 
+std::string read_text_bounded(const std::filesystem::path& path, std::size_t maximum_bytes) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) throw std::runtime_error("unable to open request json: " + path_utf8(path));
+    std::array<char, 65536> buffer{};
+    std::string result;
+    for (;;) {
+        const auto remaining = maximum_bytes - result.size();
+        // Read at most one byte beyond the limit to distinguish a full file
+        // from an oversized one without accumulating unbounded content.
+        const auto amount = remaining < buffer.size() ? remaining + 1 : buffer.size();
+        input.read(buffer.data(), static_cast<std::streamsize>(amount));
+        const auto count = static_cast<std::size_t>(input.gcount());
+        if (count > remaining) throw std::runtime_error("local request exceeds inspection bounds");
+        result.append(buffer.data(), count);
+        if (input.bad()) throw std::runtime_error("local request could not be read completely");
+        if (input.eof()) break;
+        if (input.fail()) throw std::runtime_error("local request could not be read completely");
+    }
+    return result;
+}
+
 std::filesystem::path as_path(const json& value) {
     if (value.is_null()) {
         return {};
     }
-    return std::filesystem::path(value.get<std::string>());
+    return std::filesystem::u8path(value.get<std::string>());
 }
 
 // Like as_path but looks up by key, returning empty path for missing or null.
@@ -44,7 +70,7 @@ std::filesystem::path opt_path(const json& obj, const char* key) {
     if (it == obj.end() || it->is_null()) {
         return {};
     }
-    return std::filesystem::path(it->get<std::string>());
+    return std::filesystem::u8path(it->get<std::string>());
 }
 
 template <typename T>
@@ -101,8 +127,8 @@ void reject_governance_fields(const json& value) {
 
 }  // namespace
 
-NativeRequest load_request(const std::filesystem::path& path) {
-    const json payload = json::parse(read_text(path));
+static NativeRequest parse_request_contents(const std::filesystem::path& path, const std::string& source_bytes) {
+    const json payload = json::parse(source_bytes);
     reject_governance_fields(payload);
 
     NativeRequest request{};
@@ -349,6 +375,23 @@ NativeRequest load_request(const std::filesystem::path& path) {
         throw std::runtime_error("request.output_dir is required");
     }
     return request;
+}
+
+NativeRequest load_request(const std::filesystem::path& path, std::string& source_bytes) {
+    source_bytes = read_text(path);
+    return parse_request_contents(path, source_bytes);
+}
+
+NativeRequest load_request_bounded(const std::filesystem::path& path, std::string& source_bytes,
+                                   std::size_t maximum_bytes) {
+    source_bytes.clear();
+    source_bytes = read_text_bounded(path, maximum_bytes);
+    return parse_request_contents(path, source_bytes);
+}
+
+NativeRequest load_request(const std::filesystem::path& path) {
+    std::string ignored_source_bytes;
+    return load_request(path, ignored_source_bytes);
 }
 
 }  // namespace ida_native

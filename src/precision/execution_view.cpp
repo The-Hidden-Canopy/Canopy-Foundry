@@ -59,6 +59,8 @@ const PackedExecutionView* ExecutionViewCache::lookup(
     const ExecutionViewKey& key,
     TensorGeneration generation
 ) const noexcept {
+    const auto latest = generations_.find(key.tensor);
+    if (latest != generations_.end() && generation.value < latest->second.value) return nullptr;
     const auto found = views_.find(key);
     if (found == views_.end() || !found->second.valid_for(key, generation)) {
         return nullptr;
@@ -74,6 +76,25 @@ const PackedExecutionView& ExecutionViewCache::require(
     if (!generation.valid()) {
         throw ExecutionViewError(
             "execution view requires a non-zero source generation");
+    }
+
+    const auto latest = generations_.find(key.tensor);
+    if (latest != generations_.end() && generation.value < latest->second.value) {
+        ++stats_.stale_rejections;
+        throw ExecutionViewError("execution view source generation moved backwards");
+    }
+    if (latest == generations_.end() || generation.value > latest->second.value) {
+        // A newer generation invalidates every role/layout for this tensor,
+        // not merely the key that first observed the mutation.
+        for (auto it = views_.begin(); it != views_.end();) {
+            if (it->first.tensor == key.tensor) {
+                it = views_.erase(it);
+                ++stats_.stale_rejections;
+            } else {
+                ++it;
+            }
+        }
+        generations_[key.tensor] = generation;
     }
 
     const auto found = views_.find(key);
@@ -93,6 +114,11 @@ const PackedExecutionView& ExecutionViewCache::require(
     }
 
     PackedExecutionView rebuilt = builder(key, generation);
+    const auto latest_after_build = generations_.find(key.tensor);
+    if (latest_after_build == generations_.end() || latest_after_build->second != generation) {
+        ++stats_.stale_rejections;
+        throw ExecutionViewError("execution view generation changed during rebuild");
+    }
     if (!rebuilt.valid_for(key, generation)) {
         ++stats_.stale_rejections;
         throw ExecutionViewError(
@@ -116,6 +142,13 @@ void ExecutionViewCache::invalidate(
             "execution view invalidation requires a non-zero generation");
     }
 
+    const auto latest = generations_.find(tensor);
+    if (latest != generations_.end() && new_generation.value < latest->second.value) {
+        ++stats_.stale_rejections;
+        throw ExecutionViewError("execution view invalidation generation moved backwards");
+    }
+    generations_[tensor] = new_generation;
+
     for (auto it = views_.begin(); it != views_.end();) {
         if (it->first.tensor == tensor) {
             it = views_.erase(it);
@@ -129,6 +162,11 @@ void ExecutionViewCache::invalidate(
 void ExecutionViewCache::invalidate_all() {
     stats_.invalidations += views_.size();
     views_.clear();
+}
+
+void ExecutionViewCache::reset_for_new_model() {
+    invalidate_all();
+    generations_.clear();
 }
 
 }  // namespace canopy_foundry

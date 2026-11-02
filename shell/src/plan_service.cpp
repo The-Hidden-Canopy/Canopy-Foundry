@@ -19,18 +19,23 @@ void start_selected_run(ShellState& state) {
         state.status = "Select a request JSON before starting Run.";
         return;
     }
-    const auto result = start_local_run(state.document.path);
-    if (!result.run_id.empty()) state.local_run_id = result.run_id;
+    apply_start_result(state, start_local_run(state.document.path));
+}
+void apply_start_result(ShellState& state, const LocalOperationResult& result) {
+    // Unknown outcomes must use current-owner reconciliation even when an
+    // unverified run ID accompanied the response.
+    if (result.exit_code == 4) state.local_run_id.clear();
+    else if (!result.run_id.empty()) state.local_run_id = result.run_id;
     state.status = result.message;
 }
 void cancel_selected_run(ShellState& state) {
     const auto result = cancel_local_run(state.local_run_id);
-    if (result.job_stopped) state.local_run_id.clear();
+    if (result.job_stopped || result.exit_code == 4) state.local_run_id.clear();
     state.status = result.message;
 }
 void refresh_selected_run(ShellState& state) {
     const auto result = status_local_run(state.local_run_id);
-    if (result.job_stopped) state.local_run_id.clear();
+    if (result.job_stopped || result.exit_code == 4) state.local_run_id.clear();
     else if (!result.run_id.empty()) state.local_run_id = result.run_id;
     state.status = result.message;
 }

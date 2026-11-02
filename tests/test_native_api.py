@@ -113,6 +113,54 @@ class NativeApiBoundaryTests(unittest.TestCase):
         with self.assertRaises(RequestFailure):
             self.service.validate(body)
 
+    def test_legacy_model_defaults_and_supported_layouts_remain_admitted(self) -> None:
+        for model in (
+            {},
+            {"hidden_size": 128},
+            {"architecture_contract": "ida_lattice_native_v1"},
+            {"architecture_contract": "hf_gpt2_native_v1"},
+            {
+                "architecture_contract": "generic_moe_native_v1",
+                "generic_moe_num_experts": 8,
+                "generic_moe_top_k": 2,
+                "generic_moe_expert_width": 512,
+            },
+        ):
+            with self.subTest(model=model):
+                body = self.valid_body()
+                body["request"]["model"] = model
+                original = json.loads(json.dumps(body))
+                self.assertEqual(self.service.validate(body), {"valid": True})
+                self.assertEqual(body, original)
+                self.assertFalse(self.run_root.exists())
+
+    def test_model_contract_rejections_match_the_worker_layout_boundary(self) -> None:
+        for model in (
+            {"architecture_contract": "external_graph_v1"},
+            {"architecture_contract": None},
+            {"architecture_contract": []},
+            {"architecture_contract": "generic_moe_native_v1", "generic_moe_shared_expert_width": 128},
+            {"generic_moe_num_experts": 8},
+            {"architecture_contract": "hf_gpt2_native_v1", "generic_moe_top_k": 2},
+            {"generic_moe_shared_expert_width": True},
+            {"generic_moe_shared_expert_width": -1},
+            {"generic_moe_shared_expert_width": "128"},
+        ):
+            with self.subTest(model=model):
+                body = self.valid_body()
+                body["request"]["model"] = model
+                with self.assertRaisesRegex(RequestFailure, "model contract or layout is unsupported"):
+                    self.service.validate(body)
+                self.assertFalse(self.run_root.exists())
+
+    def test_model_contract_error_does_not_echo_the_supplied_value(self) -> None:
+        body = self.valid_body()
+        private_value = str(self.artifact_root / "private-model")
+        body["request"]["model"] = {"architecture_contract": private_value}
+        with self.assertRaises(RequestFailure) as error:
+            self.service.validate(body)
+        self.assertNotIn(private_value, str(error.exception))
+
     def test_no_server_or_process_surface_remains(self) -> None:
         source = Path(__file__).parents[1].joinpath("api", "native_api.py").read_text(
             encoding="utf-8"

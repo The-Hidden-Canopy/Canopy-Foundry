@@ -376,7 +376,8 @@ LocalOperationResult owner_file_start(const std::filesystem::path& file, const s
         return {4, "Owner endpoint unavailable or unverified; reconcile the retained owner."};
     return owner_pipe_start(endpoint, request, timeout);
 }
-OwnerHost::OwnerHost(std::unique_ptr<OwnedRunBackend> backend) : owner_(std::move(backend)) {}
+OwnerHost::OwnerHost(std::unique_ptr<OwnedRunBackend> backend, RuntimeCapabilities capabilities)
+    : owner_(std::move(backend), std::move(capabilities)) {}
 bool OwnerHost::open(const std::filesystem::path& endpoint_file, std::string& error) {
     if (ready_) { error = "owner host already open"; return false; }
     OwnerEndpoint endpoint;
@@ -402,7 +403,7 @@ OwnerServeResult OwnerHost::serve_until_quiescent(bool (*stop_requested)(void*) 
         const auto served = pipe_.serve_once(owner_, poll_interval, error);
         // Observation is not a training receipt. It only allows a verified
         // stopped job to become quiescent; unknown stays non-quiescent.
-        if (!owner_.may_shutdown()) (void)owner_.current();
+        if (!owner_.may_shutdown() && !owner_.requires_reconciliation()) (void)owner_.current();
         if (served == OwnerServeResult::error) {
             if (owner_.may_shutdown()) return served;
             // Do not spin or abandon ownership if the control transport fails.

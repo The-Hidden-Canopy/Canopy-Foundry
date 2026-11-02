@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -30,6 +31,19 @@ struct SpriteFrame {
     std::vector<SpriteCell> cells;
 };
 
+// Native full-colour source pixels, before the terminal atlas's two-colour
+// quadrant packing. Transparent pixels leave the card background untouched.
+struct NativeSpritePixel {
+    std::uint8_t red{0}, green{0}, blue{0}, alpha{0};
+};
+
+struct NativeSpriteFrame {
+    int width{0};
+    int height{0};
+    int view_left{0}, view_top{0}, view_width{0}, view_height{0};
+    std::vector<NativeSpritePixel> pixels;
+};
+
 struct SpriteSheet {
     bool loaded{false};
     std::filesystem::path path;
@@ -37,7 +51,18 @@ struct SpriteSheet {
     std::string error;
     int frame_hold_ticks{6};
     std::vector<SpriteFrame> frames;
+    std::vector<NativeSpriteFrame> native_frames;
+    // Optional presentation order; frame data itself is retained intact.
+    std::vector<std::size_t> presentation_frames;
 };
+
+struct SpriteSize { int width{0}; int height{0}; };
+
+// Quadrants came from a terminal with cells twice as tall as they are wide.
+// Fit that aspect in the available space instead of drawing square quadrants.
+[[nodiscard]] SpriteSize fit_sprite(const SpriteFrame& frame, int width, int height) noexcept;
+[[nodiscard]] SpriteSize fit_native_sprite(const NativeSpriteFrame& frame, int width, int height) noexcept;
+[[nodiscard]] SpriteSize companion_card_size(int content_width) noexcept;
 
 // Reads the generated, terminal-ready IDA CLI sheet. The WALK set is preferred
 // because it contains multiple poses; the one-frame IDA set remains a safe
@@ -53,8 +78,15 @@ struct SpriteSheet {
     std::uint64_t animation_tick
 ) noexcept;
 
+[[nodiscard]] const NativeSpriteFrame* native_sprite_frame_at(
+    const SpriteSheet& sheet, std::uint64_t animation_tick
+) noexcept;
+
 // A small shared breathing motion keeps the sprite alive without implying
 // runtime activity. It is presentation-only and does not read execution state.
 [[nodiscard]] int sprite_breathe_offset(std::uint64_t animation_tick) noexcept;
+// True when the pixels selected for the card can differ between two ticks.
+[[nodiscard]] bool sprite_visual_changes(const SpriteSheet& sheet,
+    std::uint64_t before, std::uint64_t after) noexcept;
 
 }  // namespace canopy_foundry::shell

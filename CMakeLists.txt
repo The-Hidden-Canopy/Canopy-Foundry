@@ -48,6 +48,12 @@ option(CANOPY_FOUNDRY_BUILD_SHELL
 option(CANOPY_FOUNDRY_ENABLE_X11_SHELL
   "Use the X11 native backend when building on Linux"
   ON)
+option(CANOPY_FOUNDRY_ENABLE_LOCAL_OWNER
+  "Build the opt-in Windows foreground local owner; requires containment acceptance before use"
+  OFF)
+if(CANOPY_FOUNDRY_ENABLE_LOCAL_OWNER AND NOT WIN32)
+  message(FATAL_ERROR "The local owner transport requires the Windows owner implementation")
+endif()
 if(CANOPY_FOUNDRY_PUBLIC_BUILD AND IDA_NATIVE_ENABLE_PRIVATE_OBSERVABILITY)
   message(FATAL_ERROR
     "Public Canopy Foundry builds cannot enable private observability; "
@@ -89,6 +95,20 @@ target_link_libraries(ida_native_request_governance_test PRIVATE
 )
 add_test(NAME ida_native_request_governance
   COMMAND ida_native_request_governance_test)
+
+add_executable(foundry_status_unicode_path_test tests/status_unicode_path_test.cpp src/status.cpp)
+target_compile_features(foundry_status_unicode_path_test PRIVATE cxx_std_20)
+target_include_directories(foundry_status_unicode_path_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/tests/fake_cuda_runtime ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(foundry_status_unicode_path_test PRIVATE nlohmann_json::nlohmann_json)
+add_test(NAME foundry_status_unicode_path COMMAND foundry_status_unicode_path_test)
+
+if(WIN32)
+  add_executable(foundry_unicode_arguments_test tests/unicode_arguments_test.cpp)
+  target_compile_features(foundry_unicode_arguments_test PRIVATE cxx_std_20)
+  target_include_directories(foundry_unicode_arguments_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  add_test(NAME foundry_unicode_arguments COMMAND foundry_unicode_arguments_test)
+endif()
 
 set(IDA_NATIVE_CUDA_ARCHITECTURES "90a"
   CACHE STRING
@@ -146,6 +166,9 @@ add_executable(ida_native_train
   kernels/lrss.cu
   kernels/moe.cu
 )
+if(MINGW)
+  target_link_options(ida_native_train PRIVATE -municode)
+endif()
 
 target_include_directories(ida_native_train PRIVATE
   ${IDA_NATIVE_PRIVATE_AWARE_INCLUDE_DIRS}
@@ -332,6 +355,7 @@ endif()
 add_library(foundry_execution_service STATIC
   src/execution/service.cpp
   src/execution/owner_pipe.cpp
+  src/execution/local_backend.cpp
   src/execution/checkpoint_inspection.cpp
   src/execution/plan.cpp
   src/execution/capability.cpp
@@ -348,6 +372,7 @@ target_include_directories(foundry_execution_service PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/include-public
 )
 target_compile_definitions(foundry_execution_service PRIVATE
+  CANOPY_FOUNDRY_LOCAL_OWNER_TRANSPORT=$<BOOL:${CANOPY_FOUNDRY_ENABLE_LOCAL_OWNER}>
   CANOPY_FOUNDRY_BUILD_CUDA=${CANOPY_FOUNDRY_BUILD_CUDA}
   CANOPY_FOUNDRY_BUILD_OPENCL=${CANOPY_FOUNDRY_BUILD_OPENCL}
   CANOPY_FOUNDRY_BUILD_CPU=${CANOPY_FOUNDRY_BUILD_CPU}
@@ -358,10 +383,43 @@ if(WIN32)
 endif()
 add_executable(foundry_plan tools/foundry_plan.cpp)
 target_link_libraries(foundry_plan PRIVATE foundry_execution_service)
+if(MINGW)
+  target_link_options(foundry_plan PRIVATE -municode)
+endif()
 set_target_properties(foundry_plan PROPERTIES OUTPUT_NAME "foundry")
+if(WIN32 AND CANOPY_FOUNDRY_ENABLE_LOCAL_OWNER)
+  add_executable(foundry_owner tools/foundry_owner.cpp)
+  target_link_libraries(foundry_owner PRIVATE foundry_execution_service)
+  if(MINGW)
+    target_link_options(foundry_owner PRIVATE -municode)
+  endif()
+  install(TARGETS foundry_owner RUNTIME DESTINATION bin)
+endif()
+if(WIN32 AND NOT CANOPY_FOUNDRY_ENABLE_LOCAL_OWNER)
+  # Compile the bootstrap in disabled builds without producing an executable.
+  add_library(foundry_owner_compile_check OBJECT tools/foundry_owner.cpp)
+  target_link_libraries(foundry_owner_compile_check PRIVATE foundry_execution_service)
+endif()
+install(FILES docs/local-owner.md DESTINATION share/canopy-foundry/docs)
+if(WIN32)
+  add_executable(foundry_local_backend_fixture_test tests/local_backend_fixture_test.cpp)
+  target_link_libraries(foundry_local_backend_fixture_test PRIVATE foundry_execution_service)
+  if(TARGET foundry_owner_compile_check)
+    add_dependencies(foundry_local_backend_fixture_test foundry_owner_compile_check)
+  endif()
+  if(MINGW)
+    # The fixture copies itself into private directories and deliberately runs
+    # with no inherited loader PATH. Keep its compiler runtime self-contained.
+    target_link_options(foundry_local_backend_fixture_test PRIVATE -municode -static -static-libgcc -static-libstdc++)
+  endif()
+  add_test(NAME foundry_local_backend_fixture COMMAND foundry_local_backend_fixture_test
+    ${CMAKE_CURRENT_BINARY_DIR}/local-backend-fixture ${CMAKE_SOURCE_DIR})
+  set_tests_properties(foundry_local_backend_fixture PROPERTIES TIMEOUT 30)
+endif()
 add_test(NAME foundry_cli_unavailable
   COMMAND ${CMAKE_COMMAND} -DFOUNDRY=$<TARGET_FILE:foundry_plan>
           -DFOUNDRY_EXAMPLE=${CMAKE_SOURCE_DIR}/configs/examples/planning_only_request.json
+          -DFOUNDRY_LOCAL_OWNER_ENABLED=${CANOPY_FOUNDRY_ENABLE_LOCAL_OWNER}
           -P ${CMAKE_SOURCE_DIR}/tests/cli_unavailable_test.cmake)
 
 add_executable(foundry_execution_plan_test

@@ -126,7 +126,8 @@ void write_status(
     payload << "\n}\n";
 
     std::filesystem::create_directories(status_file.parent_path());
-    const auto tmp = status_file.string() + ".tmp";
+    auto tmp = status_file;
+    tmp += ".tmp";
     {
         std::ofstream output(tmp, std::ios::binary | std::ios::trunc);
         if (!output) {

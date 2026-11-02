@@ -9,6 +9,11 @@ The native executable remains a one-shot CLI. The `ida_native_train` name is
 retained for wrapper compatibility; the public runtime identity is Neural
 Foundry.
 
+Admission reuses the worker's public model-layout validator. Omitted contract
+IDs retain the dense legacy default; explicit unknown contracts, shared-expert
+MoE layouts, and MoE fields under dense contracts are rejected before a run.
+This is metadata preflight, not tensor, binary, device, or checkpoint evidence.
+
 ```text
 bin/ida_native_train \
   --request-json /path/to/request.json \

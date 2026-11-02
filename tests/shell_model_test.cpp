@@ -103,6 +103,68 @@ int main() {
     assert(canopy_foundry::shell::sprite_frame_at(sprite_sheet, 12) ==
            &sprite_sheet.frames[0]);
 
+    // Idle pixels do not need a repaint every timer tick; breathing and a
+    // legacy frame transition do. Missing assets never animate.
+    assert(!canopy_foundry::shell::sprite_visual_changes(sprite_sheet, 0, 1));
+    assert(canopy_foundry::shell::sprite_visual_changes(sprite_sheet, 2, 3));
+    assert(canopy_foundry::shell::sprite_visual_changes(sprite_sheet, 5, 6));
+    canopy_foundry::shell::SpriteSheet empty_sheet;
+    assert(!canopy_foundry::shell::sprite_visual_changes(empty_sheet, 2, 3));
+
+    auto sequenced = sprite;
+    sequenced["WALK"]["presentation_frames"] = {1, 0, 1};
+    std::ofstream(sprite_path) << sequenced.dump();
+    assert(canopy_foundry::shell::load_ida_sprite_sheet(sprite_path, sprite_sheet, error));
+    assert(sprite_sheet.frames.size() == 2);
+    assert(canopy_foundry::shell::sprite_frame_at(sprite_sheet, 0) == &sprite_sheet.frames[1]);
+    assert(canopy_foundry::shell::sprite_frame_at(sprite_sheet, 6) == &sprite_sheet.frames[0]);
+    assert(canopy_foundry::shell::sprite_frame_at(sprite_sheet, 12) == &sprite_sheet.frames[1]);
+    // The public sheet can become stale after loading; selection must refuse
+    // a presentation index that no longer names a frame.
+    auto stale_sequence = sprite_sheet;
+    stale_sequence.frames.resize(1);
+    assert(canopy_foundry::shell::sprite_frame_at(stale_sequence, 0) == nullptr);
+
+    sequenced["WALK"]["presentation_frames"] = {2};
+    std::ofstream(sprite_path) << sequenced.dump();
+    assert(!canopy_foundry::shell::load_ida_sprite_sheet(sprite_path, sprite_sheet, error));
+    assert(error == "invalid presentation frame index");
+
+    canopy_foundry::shell::SpriteFrame dimensions;
+    dimensions.width = 24;
+    dimensions.height = 18;
+    const auto fit = canopy_foundry::shell::fit_sprite(dimensions, 200, 138);
+    assert(fit.width == 92 && fit.height == 138);
+    const auto narrow = canopy_foundry::shell::fit_sprite(dimensions, 20, 138);
+    assert(narrow.width == 20 && narrow.height == 30);
+    assert(canopy_foundry::shell::fit_sprite(dimensions, 0, 138).width == 0);
+
+    auto with_native = sprite;
+    with_native["NATIVE_RGBA"] = {
+        {"width", 2}, {"height", 1},
+        {"frames", nlohmann::json::array({nlohmann::json::array({"12345680abcdef00"})})},
+    };
+    std::ofstream(sprite_path) << with_native.dump();
+    assert(canopy_foundry::shell::load_ida_sprite_sheet(sprite_path, sprite_sheet, error));
+    assert(sprite_sheet.native_frames.size() == 1);
+    const auto* native = canopy_foundry::shell::native_sprite_frame_at(sprite_sheet, 0);
+    assert(native && native->pixels.size() == 2);
+    assert(native->pixels[0].red == 0x12 && native->pixels[0].green == 0x34 &&
+           native->pixels[0].blue == 0x56 && native->pixels[0].alpha == 0x80);
+    assert(native->pixels[1].alpha == 0);
+    // A single native pose remains stable even when legacy frames advance.
+    assert(canopy_foundry::shell::native_sprite_frame_at(sprite_sheet, 6) == native);
+    const auto native_size = canopy_foundry::shell::fit_native_sprite(*native, 80, 80);
+    assert(native_size.width == 80 && native_size.height == 40);
+    with_native["NATIVE_RGBA"]["frames"][0][0] = "bad";
+    std::ofstream(sprite_path) << with_native.dump();
+    assert(canopy_foundry::shell::load_ida_sprite_sheet(sprite_path, sprite_sheet, error));
+    assert(sprite_sheet.native_frames.empty()); // malformed optional art keeps legacy usable
+    const auto small_card = canopy_foundry::shell::companion_card_size(672);
+    const auto large_card = canopy_foundry::shell::companion_card_size(1326);
+    assert(small_card.width == 224 && small_card.height == 208);
+    assert(large_card.width == 320 && large_card.height == 304);
+
     std::ofstream(root / "bad-sprite.json") << "{\"WALK\": {\"frames\": []}}";
     canopy_foundry::shell::SpriteSheet bad_sprite;
     assert(!canopy_foundry::shell::load_ida_sprite_sheet(

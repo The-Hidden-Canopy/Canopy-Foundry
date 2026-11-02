@@ -15,6 +15,18 @@ file server. The interface intentionally labels example data and local
 documents as non-runtime evidence unless a bounded receipt-shaped document is
 provided for review. It does not independently verify a receipt.
 
+The Capabilities view reads the selected
+`canopy-foundry-runtime-capabilities.v1` inventory or
+`neural-foundry-capability-catalog.v1` catalog. It preserves declared disabled,
+unavailable, experimental, and unverified states and labels evidence as a
+document claim. Loading a request, example, or another file clears the previous
+inventory. There is no built-in table of assumed machine capabilities.
+
+The dependency-free behavioral checks for inventory selection, replacement,
+legacy catalogs, and malformed claims run with:
+
+    node --test tests/frontend_capabilities.test.cjs
+
 The intended next integration is a local adapter that supplies the output of
 the native foundry plan and foundry receipt commands through files or an
 explicit embedding surface. The adapter should not turn this directory into an

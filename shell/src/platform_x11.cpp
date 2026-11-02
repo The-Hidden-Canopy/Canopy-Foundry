@@ -4,15 +4,20 @@
 #include "canopy_foundry/shell/guide.hpp"
 
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #include <X11/keysym.h>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <sys/select.h>
 #include <sys/wait.h>
 #include <spawn.h>
 #include <thread>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -24,6 +29,12 @@ namespace {
 constexpr int kTopHeight = 64;
 constexpr int kLeftWidth = 204;
 constexpr int kRightWidth = 316;
+
+// XAllocColor is a server round trip and allocates a colormap reference. Reuse
+// the colors for the lifetime of this display instead of allocating per pixel.
+std::unordered_map<std::string, unsigned long> named_colors;
+std::unordered_map<std::uint32_t, unsigned long> sprite_colors;
+XFontStruct* stage_label_font = nullptr;
 
 void open_guide_document(ShellState& state, GuideDocument document) {
     const auto path = guide_document_path(state.frontend_root, document);
@@ -39,13 +50,15 @@ void open_guide_document(ShellState& state, GuideDocument document) {
 }
 
 unsigned long color(Display* display, const char* name) {
+    const auto found = named_colors.find(name);
+    if (found != named_colors.end()) return found->second;
     XColor exact{};
     XColor screen{};
     const Colormap colormap = DefaultColormap(display, DefaultScreen(display));
-    if (XAllocNamedColor(display, colormap, name, &screen, &exact) == 0) {
-        return BlackPixel(display, DefaultScreen(display));
-    }
-    return screen.pixel;
+    const auto result = XAllocNamedColor(display, colormap, name, &screen, &exact) == 0
+        ? BlackPixel(display, DefaultScreen(display)) : screen.pixel;
+    named_colors.emplace(name, result);
+    return result;
 }
 
 void fill(
@@ -94,6 +107,33 @@ void text(
         value.c_str(), static_cast<int>(value.size()));
 }
 
+// Restrict text to a column, then restore the GC's unrestricted clip.
+void text_clipped(
+    Display* display, Window window, GC gc, const std::string& value,
+    int draw_x, int y, int clip_x, int width, unsigned long value_color
+) {
+    if (width <= 0 || clip_x > std::numeric_limits<short>::max()) return;
+    const long long requested_right = static_cast<long long>(clip_x) + width;
+    const int clip_left = std::max(0, clip_x);
+    if (clip_left > std::numeric_limits<short>::max()) return;
+    const long long clipped_width = std::min(requested_right - clip_left,
+        static_cast<long long>(std::numeric_limits<unsigned short>::max()));
+    if (clipped_width <= 0) return;
+    XRectangle clip{static_cast<short>(clip_left), 0,
+                    static_cast<unsigned short>(clipped_width),
+                    std::numeric_limits<unsigned short>::max()};
+    XSetClipRectangles(display, gc, 0, 0, &clip, 1, Unsorted);
+    text(display, window, gc, value, draw_x, y, value_color);
+    XSetClipMask(display, gc, None);
+}
+
+void text(
+    Display* display, Window window, GC gc, const std::string& value,
+    int x, int y, int width, unsigned long value_color
+) {
+    text_clipped(display, window, gc, value, x, y, x, width, value_color);
+}
+
 void panel(
     Display* display,
     Window window,
@@ -114,16 +154,20 @@ void panel(
 }
 
 unsigned long sprite_color(Display* display, const SpriteColor& value) {
+    const std::uint32_t key = (static_cast<std::uint32_t>(value.red) << 16) |
+                              (static_cast<std::uint32_t>(value.green) << 8) | value.blue;
+    const auto found = sprite_colors.find(key);
+    if (found != sprite_colors.end()) return found->second;
     XColor exact{};
     exact.red = static_cast<unsigned short>(value.red) * 257;
     exact.green = static_cast<unsigned short>(value.green) * 257;
     exact.blue = static_cast<unsigned short>(value.blue) * 257;
     exact.flags = DoRed | DoGreen | DoBlue;
     const Colormap colormap = DefaultColormap(display, DefaultScreen(display));
-    if (XAllocColor(display, colormap, &exact) == 0) {
-        return BlackPixel(display, DefaultScreen(display));
-    }
-    return exact.pixel;
+    const auto result = XAllocColor(display, colormap, &exact) == 0
+        ? BlackPixel(display, DefaultScreen(display)) : exact.pixel;
+    sprite_colors.emplace(key, result);
+    return result;
 }
 
 void draw_sprite(
@@ -133,11 +177,12 @@ void draw_sprite(
     const SpriteFrame& frame,
     int left,
     int top,
-    int subpixel,
+    SpriteSize size,
     unsigned long fallback
 ) {
-    if (frame.width <= 0 || frame.height <= 0 || subpixel <= 0) return;
-    const int cell_width = subpixel * 2;
+    if (frame.width <= 0 || frame.height <= 0 || size.width <= 0 || size.height <= 0) return;
+    const auto map_x = [&](int x) { return left + static_cast<int>(static_cast<std::int64_t>(x) * size.width / (frame.width * 2LL)); };
+    const auto map_y = [&](int y) { return top + static_cast<int>(static_cast<std::int64_t>(y) * size.height / (frame.height * 2LL)); };
     for (int y = 0; y < frame.height; ++y) {
         for (int x = 0; x < frame.width; ++x) {
             const auto& cell = frame.cells[static_cast<std::size_t>(y * frame.width + x)];
@@ -151,18 +196,63 @@ void draw_sprite(
                         : sprite_color(display, cell.background);
                     XSetForeground(display, gc, value == BlackPixel(display, DefaultScreen(display)) &&
                             !foreground ? fallback : value);
+                    const int x0 = map_x(x * 2 + part_x);
+                    const int y0 = map_y(y * 2 + part_y);
+                    const int x1 = map_x(x * 2 + part_x + 1);
+                    const int y1 = map_y(y * 2 + part_y + 1);
+                    if (x1 <= x0 || y1 <= y0) continue;
                     XFillRectangle(
                         display,
                         window,
                         gc,
-                        left + x * cell_width + part_x * subpixel,
-                        top + y * cell_width + part_y * subpixel,
-                        static_cast<unsigned int>(subpixel),
-                        static_cast<unsigned int>(subpixel));
+                        x0, y0,
+                        static_cast<unsigned int>(x1 - x0),
+                        static_cast<unsigned int>(y1 - y0));
                 }
             }
         }
     }
+}
+
+bool draw_native_sprite(Display* display, Window window, GC gc, const NativeSpriteFrame& frame,
+                        int left, int top, SpriteSize size) {
+    if (frame.width <= 0 || frame.height <= 0 || size.width <= 0 || size.height <= 0 ||
+        frame.view_left < 0 || frame.view_top < 0 || frame.view_width <= 0 || frame.view_height <= 0 ||
+        frame.view_left + frame.view_width > frame.width || frame.view_top + frame.view_height > frame.height ||
+        frame.pixels.size() != static_cast<std::size_t>(frame.width) * frame.height) return false;
+    const int screen = DefaultScreen(display);
+    Visual* visual = DefaultVisual(display, screen);
+    XImage* image = XCreateImage(display, visual, static_cast<unsigned int>(DefaultDepth(display, screen)),
+                                 ZPixmap, 0, nullptr, static_cast<unsigned int>(size.width),
+                                 static_cast<unsigned int>(size.height), 32, 0);
+    if (!image) return false;
+    image->data = static_cast<char*>(std::calloc(static_cast<std::size_t>(image->bytes_per_line),
+                                                  static_cast<std::size_t>(size.height)));
+    if (!image->data) { XDestroyImage(image); return false; }
+    const auto component = [](int value, unsigned long mask) -> unsigned long {
+        if (!mask) return 0;
+        unsigned int shift = 0;
+        while (((mask >> shift) & 1UL) == 0) ++shift;
+        const auto max_value = mask >> shift;
+        return ((static_cast<unsigned long>(value) * max_value + 127) / 255 << shift) & mask;
+    };
+    for (int y = 0; y < size.height; ++y) {
+        const int sy = frame.view_top + static_cast<int>(static_cast<std::int64_t>(y) * frame.view_height / size.height);
+        for (int x = 0; x < size.width; ++x) {
+            const int sx = frame.view_left + static_cast<int>(static_cast<std::int64_t>(x) * frame.view_width / size.width);
+            const auto& pixel = frame.pixels[static_cast<std::size_t>(sy * frame.width + sx)];
+            const auto blend = [&](int value, int bg) { return (value * pixel.alpha + bg * (255 - pixel.alpha) + 127) / 255; };
+            const int r = blend(pixel.red, 16), g = blend(pixel.green, 30), b = blend(pixel.blue, 42);
+            const auto value = visual->c_class == TrueColor
+                ? component(r, visual->red_mask) | component(g, visual->green_mask) | component(b, visual->blue_mask)
+                : sprite_color(display, SpriteColor{static_cast<std::uint8_t>(r), static_cast<std::uint8_t>(g), static_cast<std::uint8_t>(b), true});
+            XPutPixel(image, x, y, value);
+        }
+    }
+    XPutImage(display, window, gc, image, 0, 0, left, top,
+              static_cast<unsigned int>(size.width), static_cast<unsigned int>(size.height));
+    XDestroyImage(image);
+    return true;
 }
 
 void draw_ida_card(
@@ -189,23 +279,19 @@ void draw_ida_card(
         return;
     }
     const int available_width = std::max(1, right - left - 24);
-    const int available_height = std::max(1, bottom - top - 68);
-    const int subpixel = std::clamp(
-        std::min(available_width / std::max(1, frame->width * 2),
-                 available_height / std::max(1, frame->height * 2)),
-        2,
-        4);
-    const int sprite_width = frame->width * subpixel * 2;
-    const int sprite_left = left + (right - left - sprite_width) / 2;
+    const int available_height = std::max(1, bottom - top - 70);
+    const auto* native = native_sprite_frame_at(state.ida_sprite, state.animation_tick);
+    const auto size = native ? fit_native_sprite(*native, available_width, available_height)
+                             : fit_sprite(*frame, available_width, available_height);
+    const int sprite_left = left + (right - left - size.width) / 2;
     const int sprite_top = top + 40 + sprite_breathe_offset(state.animation_tick);
-    draw_sprite(display, window, gc, *frame, sprite_left, sprite_top, subpixel,
-                color(display, "#101e2a"));
-    const int frame_number = static_cast<int>(
-        (state.animation_tick / std::max(1, state.ida_sprite.frame_hold_ticks)) %
-        std::max<std::size_t>(1, state.ida_sprite.frames.size())) + 1;
+    if (!native || !draw_native_sprite(display, window, gc, *native, sprite_left, sprite_top, size)) {
+        const auto fallback_size = fit_sprite(*frame, available_width, available_height);
+        draw_sprite(display, window, gc, *frame, left + (right - left - fallback_size.width) / 2,
+                    sprite_top, fallback_size, color(display, "#101e2a"));
+    }
     text(display, window, gc,
-         "FRAME " + std::to_string(frame_number) + "/" +
-             std::to_string(state.ida_sprite.frames.size()) + " / PRESENTATION ONLY",
+         "PRESENTATION ONLY",
          left + 12, bottom - 13, color(display, "#748294"));
 }
 
@@ -267,8 +353,7 @@ void render(Display* display, Window window, GC gc, ShellState& state, int width
     fill(display, window, gc, 24, 24, 9, 18, teal);
     fill(display, window, gc, 37, 20, 9, 22, teal);
     fill(display, window, gc, 50, 16, 9, 26, teal);
-    fill(display, window, gc, width - 144, 29, 7, 7,
-         state.animation_tick % 6 < 3 ? teal : color(display, "#3d968e"));
+    fill(display, window, gc, width - 144, 29, 7, 7, teal);
     text(display, window, gc, "LOCAL ONLY", width - 128, 35, muted);
     text(display, window, gc, "NATIVE", width - 65, 35, body);
 
@@ -317,12 +402,13 @@ void render(Display* display, Window window, GC gc, ShellState& state, int width
 
     const int left = kLeftWidth + 45;
     const int right = width - kRightWidth - 28;
+    const auto ida_card = companion_card_size(right - left);
     text(display, window, gc, "CANOPY FOUNDRY / " + std::string(view_name(state.view)),
          left, 98, muted);
     if (state.guide_visible) {
         text(display, window, gc, "WELCOME TO FOUNDRY", left, 143, teal);
         text(display, window, gc, "Start with IDA. Choose Train Brain to open Weave.", left, 190, bright);
-        draw_ida_card(display, window, gc, state, right - 224, 132, right, 340);
+        draw_ida_card(display, window, gc, state, right - ida_card.width, 132, right, 132 + ida_card.height);
         text(display, window, gc, "1. Check: foundry capabilities --pretty", left, 250, body);
         text(display, window, gc, "Device/toolkit: nvidia-smi and nvcc --version.", left, 273, muted);
         text(display, window, gc, "2. Plan: see the Starter Guide example", left, 315, body);
@@ -347,7 +433,7 @@ void render(Display* display, Window window, GC gc, ShellState& state, int width
         text(display, window, gc, "A native shell for local Foundry contracts.", left, 225, body);
         text(display, window, gc, "It shows the current document and evidence posture", left, 244, body);
         text(display, window, gc, "without launching training or contacting the Hub.", left, 263, body);
-        draw_ida_card(display, window, gc, state, right - 224, 132, right, 340);
+        draw_ida_card(display, window, gc, state, right - ida_card.width, 132, right, 132 + ida_card.height);
         panel(display, window, gc, left, 302, left + 145, 339,
               color(display, "#286e6c"), teal);
         text(display, window, gc, "Load local JSON", left + 13, 326, bright);
@@ -466,17 +552,20 @@ void render(Display* display, Window window, GC gc, ShellState& state, int width
                   : "No runtime receipt is attached. This shell is not reporting an execution.",
              left + 18, 465, body);
     } else if (state.view == View::Simulation) {
-        const int work_right = right - 242;
+        const int work_right = right - (state.companion_visible ? ida_card.width + 18 : 0);
         const int active_stage = simulation_stage_index(state.simulation.stage);
-        text(display, window, gc, "Execution theater", left, 155, bright);
+        text(display, window, gc,
+             "SIMULATION: " + std::string(simulation_status_name(state.simulation)), left, 155, bright);
         text(display, window, gc, "SYNTHETIC WALKTHROUGH / NOT A RUNTIME RECEIPT", left, 180, amber);
-        draw_ida_card(display, window, gc, state, right - 224, 132, right, 340);
+        draw_ida_card(display, window, gc, state, right - ida_card.width, 132, right, 132 + ida_card.height);
 
         panel(display, window, gc, left, 204, work_right, 288, raised, border);
         text(display, window, gc, "REQUEST -> PLAN -> ROUTE -> RUN -> SAVE", left + 16, 228, muted);
         const char* stages[] = {"REQUEST", "PLAN", "ROUTE", "RUN", "SAVE", "DONE"};
+        const char* compact_stages[] = {"REQ", "PLAN", "ROUTE", "RUN", "SAVE", "DONE"};
         const int track_left = left + 28;
         const int track_right = work_right - 28;
+        const int label_width = std::max(0, (track_right - track_left) / 5);
         line(display, window, gc, track_left, 258, track_right, 258, border_strong);
         for (int index = 0; index < 6; ++index) {
             const int x = track_left + (track_right - track_left) * index / 5;
@@ -485,7 +574,14 @@ void render(Display* display, Window window, GC gc, ShellState& state, int width
             fill(display, window, gc, x - (current ? 9 : 7), 251,
                  (current ? 18 : 14), (current ? 18 : 14),
                  reached ? (current ? amber : teal) : bg);
-            text(display, window, gc, stages[index], x - 38, 282, reached ? bright : muted);
+            const char* label = label_width < 55 ? compact_stages[index] : stages[index];
+            const int label_length = static_cast<int>(std::strlen(label));
+            const int measured = stage_label_font ? XTextWidth(stage_label_font, label, label_length) : label_length * 6;
+            const int cell_left = std::max(left, x - label_width / 2);
+            const int cell_right = std::min(work_right, x + (label_width + 1) / 2);
+            // Center within the allocated column, clipping at the column edges.
+            text_clipped(display, window, gc, label, x - measured / 2, 282,
+                         cell_left, cell_right - cell_left, reached ? bright : muted);
         }
 
         panel(display, window, gc, left, 306, work_right, 574,
@@ -522,10 +618,12 @@ void render(Display* display, Window window, GC gc, ShellState& state, int width
              left + 18, 568, muted);
         text(display, window, gc,
              "STAGE " + std::string(simulation_stage_name(state.simulation.stage)) +
-                 "   PROGRESS " + std::to_string(state.simulation.progress_percent) + "%" +
-                 "   MEMORY " + std::to_string(state.simulation.memory_percent) + "% synthetic",
+                 "   PROGRESS " + std::to_string(state.simulation.progress_percent) + "%",
+             left, height - 90, work_right - left, body);
+        text(display, window, gc,
+             "MEMORY " + std::to_string(state.simulation.memory_percent) + "% synthetic",
              left, height - 70, work_right - left, body);
-        text(display, window, gc, "S start/restart   P pause   R reset   SPACE pause/resume",
+        text(display, window, gc, "S: start  P/Space: pause or resume  R: reset",
              left, height - 42, work_right - left, muted);
     } else {
         text(display, window, gc, "What belongs where", left, 155, bright);
@@ -583,19 +681,31 @@ int run_native_shell(ShellState& state) {
     const Window window = XCreateSimpleWindow(
         display, RootWindow(display, screen), 0, 0, 1280, 800, 1,
         background, background);
+    // Do not clear the visible window ahead of the completed back buffer.
+    XSetWindowBackgroundPixmap(display, window, None);
     XStoreName(display, window, "Canopy Foundry - Native Shell");
     XSelectInput(
         display, window,
         ExposureMask | StructureNotifyMask | ButtonReleaseMask | KeyPressMask);
     XMapWindow(display, window);
     GC gc = XCreateGC(display, window, 0, nullptr);
+    stage_label_font = XQueryFont(display, XGContextFromGC(gc));
+    XSetGraphicsExposures(display, gc, False);
     bool running = true;
     int width = 1280;
     int height = 800;
+    int buffer_width = 0;
+    int buffer_height = 0;
+    Pixmap buffer = None;
+    bool needs_redraw = true;
+    using Clock = std::chrono::steady_clock;
+    auto next_tick = Clock::now() + std::chrono::milliseconds(100);
     while (running) {
         while (running && XPending(display) > 0) {
             XEvent event{};
             XNextEvent(display, &event);
+            if (event.type == Expose || event.type == ConfigureNotify ||
+                event.type == ButtonRelease || event.type == KeyPress) needs_redraw = true;
             if (event.type == ConfigureNotify) {
                 width = event.xconfigure.width;
                 height = event.xconfigure.height;
@@ -696,22 +806,57 @@ int run_native_shell(ShellState& state) {
             }
         }
         if (!running) break;
-        render(display, window, gc, state, width, height);
-        XFlush(display);
-        ++state.animation_tick;
-        advance_simulation(state.simulation);
+        const auto now = Clock::now();
+        if (now >= next_tick) {
+            const auto previous_animation = state.animation_tick++;
+            const auto previous_simulation = state.simulation.tick;
+            advance_simulation(state.simulation);
+            const bool show_simulation = !state.guide_visible && state.view == View::Simulation;
+            const bool show_companion = state.companion_visible &&
+                (state.guide_visible || state.view == View::Overview || show_simulation);
+            needs_redraw = needs_redraw ||
+                (show_simulation && previous_simulation != state.simulation.tick) ||
+                (show_companion && sprite_visual_changes(state.ida_sprite, previous_animation, state.animation_tick));
+            next_tick = now + std::chrono::milliseconds(100);
+        }
+        if (needs_redraw && width > 0 && height > 0) {
+            if (buffer == None || buffer_width != width || buffer_height != height) {
+                if (buffer != None) XFreePixmap(display, buffer);
+                buffer = XCreatePixmap(display, window, static_cast<unsigned int>(width),
+                                       static_cast<unsigned int>(height), DefaultDepth(display, screen));
+                buffer_width = width;
+                buffer_height = height;
+            }
+            if (buffer != None) {
+                render(display, buffer, gc, state, width, height);
+                XCopyArea(display, buffer, window, gc, 0, 0,
+                          static_cast<unsigned int>(width), static_cast<unsigned int>(height), 0, 0);
+            } else {
+                render(display, window, gc, state, width, height);
+            }
+            XFlush(display);
+            needs_redraw = false;
+        }
 
         fd_set descriptors;
         FD_ZERO(&descriptors);
         const int connection = ConnectionNumber(display);
         FD_SET(connection, &descriptors);
+        const auto remaining = std::max(Clock::duration::zero(), next_tick - Clock::now());
+        const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(remaining).count();
         timeval timeout{};
-        timeout.tv_usec = 100000;
+        timeout.tv_sec = static_cast<long>(micros / 1000000);
+        timeout.tv_usec = static_cast<long>(micros % 1000000);
         select(connection + 1, &descriptors, nullptr, nullptr, &timeout);
     }
+    if (buffer != None) XFreePixmap(display, buffer);
+    if (stage_label_font) XFreeFontInfo(nullptr, stage_label_font, 1);
+    stage_label_font = nullptr;
     XFreeGC(display, gc);
     XDestroyWindow(display, window);
     XCloseDisplay(display);
+    named_colors.clear();
+    sprite_colors.clear();
     return 0;
 }
 

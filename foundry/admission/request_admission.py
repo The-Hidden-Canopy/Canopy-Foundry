@@ -14,6 +14,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from scripts.model_contracts import ModelContractError, validate_model_shape
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -142,6 +144,16 @@ def _prepare_request(
         if section in normalized:
             _require_keys(normalized[section], allowed)
             normalized[section] = dict(normalized[section])
+
+    # Use the same layout contract as the worker. A foreign brain package or
+    # shared-expert layout must not pass this preflight as a dense model.
+    model = normalized.get("model", {})
+    try:
+        validate_model_shape(
+            model.get("architecture_contract", "ida_lattice_native_v1"), model
+        )
+    except ModelContractError as exc:
+        raise RequestFailure("model contract or layout is unsupported") from exc
 
     input_section = normalized.setdefault("input", {})
     if not isinstance(input_section, dict):

@@ -200,6 +200,11 @@ assert result == {"valid": True}
 ```
 
 Validation does not start training and does not create a run directory.
+It uses the worker's public model-contract checks, including rejection of
+unknown contracts and unsupported shared-expert layouts. Legacy requests that
+omit a contract keep the dense default. A successful metadata/path check does
+not attest model tensors, checkpoint integrity, binary identity, device
+support, execution, evaluation, or promotion; those remain separate gates.
 
 ## 5. Execute only through the governed wrapper
 
@@ -634,15 +639,17 @@ hardware probe or proof of execution. Resolve again after editing the request.
 The shell clears its displayed plan when a different document is selected or
 when **Check Run** reloads the request, so an earlier plan is not presented as
 the result of that check. Check Run does not start training.
-The separate **Run**, **Refresh status**, and **Cancel** controls are currently
-unavailable; they have no connected local execution owner in this build. The
-CLI's `run`, `status`, and `cancel` commands share that same limitation.
+The separate **Run**, **Refresh status**, and **Cancel** controls require a
+verified retained local owner. The [optional Windows owner](local-owner.md)
+is an opt-in candidate, disabled by default pending containment/runtime
+acceptance. The CLI supports the same endpoint-backed controls. Without a
+configured endpoint, the previous unavailable behavior is preserved.
 
 `foundry checkpoint DIRECTORY` checks only for the native model and optimizer
-file pair and bounded header prefixes. Exit code 3 indicates missing,
-unsupported or truncated input; exit code 4 means these limited checks passed
-but native format, lineage, generation, and runtime validation are still
-required. The shell's **Inspect resume** action performs the same check on
+file pair, bounded header lengths and JSON syntax. Exit code 3 indicates
+missing, malformed or truncated input; exit code 4 means these limited checks
+passed but tensor structure, native format, lineage, generation, and runtime
+validation are still required. The shell's **Inspect resume** action performs the same check on
 the selected request's `resume_from_checkpoint`. Neither operation modifies
 checkpoint files or authorizes a resume.
 
@@ -651,7 +658,9 @@ checkpoint files or authorizes a resume.
 Foundry's existing native executable can be invoked by an operator locally as
 described in the starter guide. Local execution does not create a Hub job or
 make Hub authorization, evaluation, or promotion decisions. The local
-`foundry run` / `cancel` service and shell controls are not connected yet.
+`foundry run` / `cancel` service and shell controls can opt into the retained
+Windows owner described above; its process observations are not training
+receipts or Hub authorization.
 
 The existing worker is a different, Hub-managed path: it claims a Hub-issued
 manifest, verifies local bindings and the attested native binary, and polls

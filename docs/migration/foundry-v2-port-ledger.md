@@ -21,6 +21,13 @@ generation is stale. A backend builder must return matching metadata before a
 view becomes consumable. The cache stores only an opaque storage identity; a
 backend continues to own device allocation and synchronization.
 
+The cache records each tensor's latest requested or invalidated generation and
+rejects backward generation requests across all roles and layouts. Clearing
+views retains those floors. An explicit new-model reset clears them only after
+the caller has retired old-model consumers. These are source-level ownership
+checks, not evidence that the CUDA trainer uses this cache or that a runtime
+allocation is valid.
+
 The planner now reports explicit master, forward, backward-dX, gradient,
 accumulator, optimizer-state, and normalization format identities while keeping
 legacy profile strings for compatibility. Current Foundry FP8 profiles resolve
@@ -83,6 +90,13 @@ does not select a production default. A workspace can be reused only for the
 same route generation, shape, and orientation key. Changed route generations,
 changed orientations, invalid builder metadata, and unavailable rebuilds are
 all explicit and counted.
+
+Explicit route invalidation also records a retirement floor: a retired route
+cannot be rebuilt, including by a reentrant builder after its callback returns.
+Later routes can coexist for in-flight microsteps until explicitly retired.
+Clearing cached workspaces retains the floor; a separate new-model reset is
+valid only after prior consumers are retired. These remain backend-neutral
+contracts and do not establish a CUDA scheduler implementation.
 
 ## Next bounded port
 

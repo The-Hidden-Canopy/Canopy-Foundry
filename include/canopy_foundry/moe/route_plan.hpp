@@ -43,6 +43,7 @@ struct RoutePlan {
     int active_expert_count{-1};
     int actual_rows{-1};
     int active_tiles{-1};
+    // -1 means unavailable; measured coefficients must be finite and nonnegative.
     double routing_load_cv{-1.0};
     bool forward_owned{true};
 

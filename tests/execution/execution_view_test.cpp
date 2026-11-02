@@ -113,5 +113,58 @@ int main() {
     if (!require(cache.empty(), "invalidate_all left cached views")) return 1;
     if (!require(cache.stats().invalidations == 1,
                  "invalidation count changed unexpectedly")) return 1;
+
+    // A mutation invalidates every representation for a tensor, and a stale
+    // caller cannot reconstruct an older generation even after cache clear.
+    ExecutionViewCache multi;
+    auto backward_key = view_key;
+    backward_key.role = ExecutionRole::BackwardDx;
+    auto other_tensor = view_key;
+    other_tensor.tensor = 8;
+    (void)multi.require(view_key, TensorGeneration{1}, builder);
+    (void)multi.require(backward_key, TensorGeneration{1}, builder);
+    (void)multi.require(other_tensor, TensorGeneration{1}, builder);
+    (void)multi.require(view_key, TensorGeneration{2}, builder);
+    if (!require(multi.lookup(backward_key, TensorGeneration{1}) == nullptr && multi.size() == 2 &&
+                     multi.lookup(other_tensor, TensorGeneration{1}) != nullptr,
+                 "new generation left an old role reusable")) return 1;
+    const int before_stale = builder_calls;
+    bool old_generation_rejected = false;
+    try { (void)multi.require(backward_key, TensorGeneration{1}, builder); }
+    catch (const ExecutionViewError&) { old_generation_rejected = true; }
+    if (!require(old_generation_rejected && builder_calls == before_stale,
+                 "stale generation was rebuilt")) return 1;
+    multi.invalidate(7, TensorGeneration{3});
+    multi.invalidate_all();
+    bool stale_after_clear = false;
+    try { (void)multi.require(view_key, TensorGeneration{2}, builder); }
+    catch (const ExecutionViewError&) { stale_after_clear = true; }
+    if (!require(stale_after_clear, "cache clear forgot the generation floor")) return 1;
+    bool rollback_rejected = false;
+    try { multi.invalidate(7, TensorGeneration{2}); }
+    catch (const ExecutionViewError&) { rollback_rejected = true; }
+    if (!require(rollback_rejected, "invalidation rolled generation backwards")) return 1;
+    (void)multi.require(view_key, TensorGeneration{3}, builder);
+    if (!require(multi.lookup(view_key, TensorGeneration{3}) != nullptr,
+                 "current generation was not admitted after invalidation")) return 1;
+    multi.reset_for_new_model();
+    (void)multi.require(view_key, TensorGeneration{1}, builder);
+    if (!require(multi.lookup(view_key, TensorGeneration{1}) != nullptr,
+                 "explicit new-model reset did not release the generation floor")) return 1;
+
+    // A builder can call back into the cache. A newer generation published
+    // inside that callback must fence the outer, now-stale rebuild.
+    ExecutionViewCache reentrant;
+    bool superseded_rejected = false;
+    try {
+        (void)reentrant.require(view_key, TensorGeneration{1},
+            [&reentrant, &builder](const ExecutionViewKey& requested, TensorGeneration generation) {
+                (void)reentrant.require(requested, TensorGeneration{2}, builder);
+                return PackedExecutionView{requested, generation, 999, 4096, 16, true};
+            });
+    } catch (const ExecutionViewError&) { superseded_rejected = true; }
+    if (!require(superseded_rejected && reentrant.lookup(view_key, TensorGeneration{1}) == nullptr &&
+                     reentrant.lookup(view_key, TensorGeneration{2}) != nullptr,
+                 "superseded reentrant build was published")) return 1;
     return 0;
 }

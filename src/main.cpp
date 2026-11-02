@@ -41,6 +41,7 @@
 #include "ida_native/status.hpp"
 #include "ida_native/telemetry.hpp"
 #include "ida_native/trainer.hpp"
+#include "ida_native/utf8_arguments.hpp"
 
 namespace {
 
@@ -76,10 +77,10 @@ Args parse_args(int argc, char** argv) {
             std::exit(0);
         } else if (token == "--request-json") {
             if (i + 1 >= argc) throw std::runtime_error("--request-json requires a path");
-            args.request_json = std::filesystem::path(argv[++i]);
+            args.request_json = std::filesystem::u8path(argv[++i]);
         } else if (token == "--kernel-telemetry") {
             if (i + 1 >= argc) throw std::runtime_error("--kernel-telemetry requires a directory");
-            args.kernel_telemetry = std::filesystem::path(argv[++i]);
+            args.kernel_telemetry = std::filesystem::u8path(argv[++i]);
         } else if (token == "--self-check") {
             args.self_check = true;
         } else if (token == "--device") {
@@ -962,7 +963,7 @@ void execute_burn(
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int native_main(int argc, char** argv) {
     try {
         const auto args = parse_args(argc, argv);
         ida_native::print_cli_welcome(std::cerr);
@@ -1071,3 +1072,12 @@ int main(int argc, char** argv) {
         return 1;
     }
 }
+
+#ifdef _WIN32
+int wmain(int argc, wchar_t** argv) {
+    try { ida_native::Utf8Arguments arguments(argc, argv); return native_main(argc, arguments.data()); }
+    catch (const std::exception& error) { std::cerr << "[ida_native_train] " << error.what() << '\n'; return 1; }
+}
+#else
+int main(int argc, char** argv) { return native_main(argc, argv); }
+#endif
