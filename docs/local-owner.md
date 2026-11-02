@@ -1,9 +1,15 @@
 # Optional Windows local execution owner
 
-The local owner is an opt-in implementation of the existing retained-owner
-contract. Its build option is off by default. Native compilation, synthetic
-containment acceptance, and target-runtime validation are required before
-using this candidate with a trainer. Source presence is not acceptance.
+The local owner is an unavailable prototype of the retained-owner contract.
+Local Run requires an existing Hub-issued job. This prototype has no adapter
+that verifies that admission, so setting `CANOPY_FOUNDRY_ENABLE_LOCAL_OWNER=ON`
+fails configuration. An operator binary pin, endpoint ACL or containment test
+does not grant run authority. The default and explicit OFF remain disabled.
+
+Use the existing authenticated, organization-scoped Hub-managed worker in
+`scripts/neural_forge_worker.py` for admitted jobs. This change does not add
+a native Hub adapter, create a job, change worker permissions, or authorize
+execution, evaluation or promotion.
 
 The standalone native CLI and Hub-managed worker remain available through
 their existing contracts. This owner does not create a Hub job, use a worker
@@ -14,8 +20,8 @@ and the shell/CLI service ignores the owner-endpoint environment setting. The
 low-level owner interfaces remain compiled for synthetic contract fixtures;
 their presence does not enable a foreground owner executable or a user run.
 A disabled Windows build also compiles the bootstrap source as an object-only
-check, without creating an executable. An enabled executable still requires a
-separate opt-in build and link check.
+check, without creating an executable. Synthetic fixtures do not authorize
+enabling or operating the prototype.
 
 ## Build and verify the candidate
 
@@ -28,27 +34,16 @@ cmake --build build --target foundry_local_backend_fixture_test foundry_shell_pl
 ctest --test-dir build -C Release -R "foundry_(local_backend_fixture|shell_plan_service_contract|owner_pipe_fixture|cli_unavailable)$" --output-on-failure
 ```
 
-Build `foundry_owner` only after reviewing containment acceptance, by explicitly
-setting `CANOPY_FOUNDRY_ENABLE_LOCAL_OWNER=ON`. Neither building nor starting
-the foreground owner launches a training run. Non-Windows factories fail
-closed; there is no process-group fallback pretending to provide Windows
-containment guarantees.
+The default/OFF policy and explicit ON refusal are covered by the three
+`foundry_local_owner_admission_*` CTest cases. No trainer or owner is launched.
 
-## Configure and control one run
+## Unavailable prototype protocol
 
-The operator supplies an absolute path to the approved public
-`ida_native_train.exe`, its SHA-256 (uppercase or lowercase hexadecimal), one local CUDA ordinal, an
-existing local run directory, and a new endpoint filename in an operator-private
-directory. Obtain the binary pin from the reviewed build/deployment artifact.
-Hashing an arbitrary executable does not establish that it is approved.
-
-```text
-foundry_owner --endpoint PRIVATE_ENDPOINT --binary APPROVED_BINARY --binary-sha256 APPROVED_SHA256 --run-root LOCAL_RUN_ROOT --device 0 --max-seconds 3600
-foundry run REQUEST.json --owner-endpoint PRIVATE_ENDPOINT
-foundry current --owner-endpoint PRIVATE_ENDPOINT
-foundry status RUN-ID --owner-endpoint PRIVATE_ENDPOINT
-foundry cancel RUN-ID --owner-endpoint PRIVATE_ENDPOINT
-```
+The following describes source-level containment and protocol mechanics for
+review and synthetic fixtures. It is not an operational Run path. A future
+adapter must validate an existing Hub-issued job using the established worker
+contract before this prototype can be enabled. No operator-only exception or
+caller-supplied job identifier establishes admission.
 
 `PRIVATE_ENDPOINT`, `APPROVED_BINARY` and `LOCAL_RUN_ROOT` must be absolute local
 paths. The endpoint is created exclusively with a restrictive ACL. The client

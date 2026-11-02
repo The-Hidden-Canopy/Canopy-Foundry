@@ -48,12 +48,7 @@ option(CANOPY_FOUNDRY_BUILD_SHELL
 option(CANOPY_FOUNDRY_ENABLE_X11_SHELL
   "Use the X11 native backend when building on Linux"
   ON)
-option(CANOPY_FOUNDRY_ENABLE_LOCAL_OWNER
-  "Build the opt-in Windows foreground local owner; requires containment acceptance before use"
-  OFF)
-if(CANOPY_FOUNDRY_ENABLE_LOCAL_OWNER AND NOT WIN32)
-  message(FATAL_ERROR "The local owner transport requires the Windows owner implementation")
-endif()
+include(cmake/LocalOwnerAdmission.cmake)
 if(CANOPY_FOUNDRY_PUBLIC_BUILD AND IDA_NATIVE_ENABLE_PRIVATE_OBSERVABILITY)
   message(FATAL_ERROR
     "Public Canopy Foundry builds cannot enable private observability; "
@@ -82,6 +77,15 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 enable_testing()
+
+foreach(ADMISSION_MODE IN ITEMS default off on)
+  add_test(NAME foundry_local_owner_admission_${ADMISSION_MODE}
+    COMMAND ${CMAKE_COMMAND}
+      -DROOT=${CMAKE_CURRENT_SOURCE_DIR}
+      -DWORK=${CMAKE_CURRENT_BINARY_DIR}/owner-admission-tests
+      -DMODE=${ADMISSION_MODE}
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/local_owner_policy_test.cmake)
+endforeach()
 
 add_executable(ida_native_request_governance_test
   tests/request_governance_test.cpp
