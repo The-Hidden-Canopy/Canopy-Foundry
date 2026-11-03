@@ -1,8 +1,47 @@
 #include "canopy_foundry/shell/model.hpp"
+#include "canopy_foundry/execution/hub_worker.hpp"
 #include "canopy_foundry/execution/service.hpp"
 #include <exception>
+#include <mutex>
+#include <optional>
+#include <thread>
 
 namespace canopy_foundry::shell {
+struct HubJobTask {
+    std::mutex mutex;
+    std::optional<LocalOperationResult> result;
+};
+
+void start_next_hub_job(ShellState& state, std::function<LocalOperationResult()> runner) {
+    if (state.hub_job) {
+        state.status = "A job attempt is already running; wait for it to finish.";
+        return;
+    }
+    auto task = std::make_shared<HubJobTask>();
+    state.hub_job = task;
+    state.status = "Running the next job through the worker. The selected local request is not used.";
+    std::thread([task, runner = std::move(runner)] {
+        LocalOperationResult result;
+        try { result = runner(); }
+        catch (const std::exception& error) { result = {4, std::string("Run next job failed to start: ") + error.what()}; }
+        std::lock_guard lock(task->mutex);
+        task->result = std::move(result);
+    }).detach();
+}
+void start_next_hub_job(ShellState& state) {
+    start_next_hub_job(state, [] { return run_next_hub_job(hub_worker_launch_for_this_process()); });
+}
+bool poll_next_hub_job(ShellState& state) {
+    const auto task = state.hub_job;  // outlives the lock below
+    if (!task) return false;
+    {
+        std::lock_guard lock(task->mutex);
+        if (!task->result) return false;
+        state.status = task->result->message;
+    }
+    state.hub_job.reset();
+    return true;
+}
 void check_selected_run(ShellState& state) {
     // The request can change on disk after Resolve. The run check reloads it,
     // so the previously displayed plan must not appear to describe that check.

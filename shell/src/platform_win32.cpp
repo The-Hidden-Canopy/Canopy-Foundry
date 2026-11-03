@@ -403,8 +403,10 @@ void draw_plan(HDC dc, int left, int right) {
     button(dc, "Check Run", left, 676, 105);
     button(dc, "Run", left + 117, 676, 90);
     button(dc, "Cancel", left + 219, 676, 90);
-    draw_text(dc, "Run requires a verified local owner; see Help.",
-              left + 322, 686, right - left - 322, 30, 10, color(240, 174, 104), false, DT_WORDBREAK);
+    button(dc, hub_job_active(*g_state) ? "Job running" : "Run next job", left + 321, 676, 160,
+           hub_job_active(*g_state));
+    draw_text(dc, "Run needs a verified local owner; see Help.",
+              left + 493, 680, right - left - 493, 36, 9, color(240, 174, 104), false, DT_WORDBREAK);
 }
 
 void draw_capabilities(HDC dc, int left, int right) {
@@ -656,7 +658,7 @@ void draw_right_rail(HDC dc, int width, int height) {
               left + 26, 380, kRightWidth - 52, 20, 10, color(116, 130, 148));
     line(dc, left + 26, 418, width - 26, 418, color(30, 42, 56));
     draw_text(dc, "LOCAL GUARANTEES", left + 26, 446, 210, 16, 9, color(82, 96, 113), true);
-    draw_text(dc, "OK  No network calls\nOK  No runtime claims\nOK  No authority expansion\nOK  Source stays local",
+    draw_text(dc, "OK  Network only via Run next job\nOK  No runtime claims\nOK  No authority expansion\nOK  Source stays local",
               left + 26, 476, kRightWidth - 52, 92, 10, color(185, 197, 209), false, DT_WORDBREAK);
     draw_text(dc, "CANOPY FOUNDRY", left + 26, height - 58, 210, 16, 9, color(82, 96, 113), true);
     draw_text(dc, "PUBLIC LOCAL SURFACE", left + 26, height - 36, 210, 16, 8, color(82, 96, 113));
@@ -800,6 +802,12 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
                 InvalidateRect(window, nullptr, FALSE);
                 return 0;
             }
+            if (g_state->view == View::Plan && y >= 676 && y < 716 &&
+                x >= center_left + 321 && x < center_left + 481) {
+                start_next_hub_job(*g_state);
+                InvalidateRect(window, nullptr, FALSE);
+                return 0;
+            }
             if (g_state->view == View::Overview &&
                 x >= center_left + 157 && x < center_left + 267 && y >= 352 && y < 400) {
                 switch_workspace_mode(*g_state, WorkspaceMode::TrainBrain);
@@ -858,6 +866,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
                 const auto previous_animation = g_state->animation_tick++;
                 const auto previous_simulation = g_state->simulation.tick;
                 advance_simulation(g_state->simulation);
+                if (poll_next_hub_job(*g_state)) InvalidateRect(window, nullptr, FALSE);
                 // Keep the simulation clock advancing while minimized, but defer
                 // painting until WM_SIZE invalidates the restored client area.
                 if (IsIconic(window)) return 0;
@@ -880,6 +889,14 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
                 }
                 return 0;
             }
+            return 0;
+        case WM_CLOSE:
+            // The worker runs in this process's containment; closing stops it.
+            if (g_state != nullptr && hub_job_active(*g_state) &&
+                MessageBoxW(window, L"A job is running. Closing Canopy Foundry stops it. Close anyway?",
+                            L"Canopy Foundry", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+                return 0;
+            DestroyWindow(window);
             return 0;
         case WM_DESTROY:
             KillTimer(window, kAnimationTimer);

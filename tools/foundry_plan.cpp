@@ -1,4 +1,5 @@
 #include "canopy_foundry/execution/service.hpp"
+#include "canopy_foundry/execution/hub_worker.hpp"
 #include "canopy_foundry/execution/owner_pipe.hpp"
 #include "ida_native/utf8_arguments.hpp"
 
@@ -21,6 +22,7 @@ void usage() {
         << "       foundry inspect-local-run RUN_DIRECTORY\n"
         << "       foundry run REQUEST.json | foundry status RUN-ID | foundry cancel RUN-ID\n"
         << "       foundry current\n"
+        << "       foundry run-next-hub-job\n"
         << "       Add --owner-endpoint PRIVATE_FILE to these local control commands.\n\n"
         << "Start: foundry capabilities --pretty\n"
         << "       nvidia-smi; nvcc --version  (check the device and toolkit)\n"
@@ -34,6 +36,9 @@ void usage() {
         << "Run checks the request and reports whether the local service is available.\n"
         << "The optional foreground foundry_owner pins and contains one local public CUDA run.\n"
         << "Without a verified owner endpoint, run and cancel remain unavailable.\n"
+        << "run-next-hub-job runs scripts/neural_forge_worker.py once; no local request is\n"
+        << "used. Exit 0 succeeded, 1 failed, 4 nothing queued or outcome unknown. Settings\n"
+        << "come from NEURAL_FORGE_* environment variables.\n"
         << "If planning fails, check the request and retry; no run was started.\n"
         << "Guides: STARTER_GUIDE.md and docs/neural-foundry-guide.md\n";
 }
@@ -93,6 +98,12 @@ int foundry_main(int argc, char** argv) {
             if (argc != 2) throw std::runtime_error("help takes no arguments");
             usage();
             return 0;
+        }
+        if (command == "run-next-hub-job") {
+            if (argc != 2) throw std::runtime_error("run-next-hub-job takes no arguments");
+            const auto result = canopy_foundry::run_next_hub_job(canopy_foundry::hub_worker_launch_for_this_process());
+            std::cerr << result.message << '\n';
+            return result.exit_code;
         }
         if (command == "run" || command == "status" || command == "cancel" || command == "current") {
             const bool current = command == "current";

@@ -67,8 +67,8 @@ Useful diagnostics:
     bin/foundry_shell --headless --document path/to/request.json
 
 The shell can inspect request, plan, capability, and receipt-shaped JSON. It
-does not verify a receipt, launch a worker, mutate a checkpoint, contact the
-Hub, or expose a network endpoint. The frontend directory is installed beside
+does not verify a receipt, mutate a checkpoint, or expose a network endpoint.
+Only the explicit **Run next job** button launches the worker (see below). The frontend directory is installed beside
 the binary as a static asset so the shell can verify its local presentation
 surface without depending on a browser service.
 
@@ -77,6 +77,11 @@ Windows Run, Refresh status and Cancel can explicitly route to the
 `CANOPY_FOUNDRY_OWNER_ENDPOINT`. The owner is an opt-in build candidate and
 retains the trainer handles and artifacts; the shell never owns a trainer
 directly. No endpoint is inferred from a selected document or Hub request.
+
+**Run next job** (Plan view) runs the worker once, exactly as
+`foundry run-next-hub-job` does; the selected local request is not used. The
+shell stays responsive while the worker runs and shows its final status.
+Closing the shell while a job runs asks first, because closing stops the worker.
 
 The keyboard controls are shared by both native backends:
 

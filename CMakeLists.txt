@@ -360,6 +360,7 @@ add_library(foundry_execution_service STATIC
   src/execution/service.cpp
   src/execution/owner_pipe.cpp
   src/execution/local_backend.cpp
+  src/execution/hub_worker.cpp
   src/execution/checkpoint_inspection.cpp
   src/execution/plan.cpp
   src/execution/capability.cpp
@@ -391,6 +392,16 @@ if(MINGW)
   target_link_options(foundry_plan PRIVATE -municode)
 endif()
 set_target_properties(foundry_plan PROPERTIES OUTPUT_NAME "foundry")
+# Launches a fake worker through the real containment path when an interpreter
+# is available; without one only report interpretation and discovery run.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+add_executable(foundry_hub_worker_launch_test tests/hub_worker_launch_test.cpp)
+target_link_libraries(foundry_hub_worker_launch_test PRIVATE foundry_execution_service)
+if(Python3_Interpreter_FOUND)
+  add_test(NAME foundry_hub_worker_launch COMMAND foundry_hub_worker_launch_test ${Python3_EXECUTABLE})
+else()
+  add_test(NAME foundry_hub_worker_launch COMMAND foundry_hub_worker_launch_test)
+endif()
 if(WIN32 AND CANOPY_FOUNDRY_ENABLE_LOCAL_OWNER)
   add_executable(foundry_owner tools/foundry_owner.cpp)
   target_link_libraries(foundry_owner PRIVATE foundry_execution_service)

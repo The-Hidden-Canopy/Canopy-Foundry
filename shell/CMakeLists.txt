@@ -15,6 +15,9 @@ target_link_libraries(foundry_shell_core
     nlohmann_json::nlohmann_json
     foundry_execution_service
 )
+# The worker is awaited on a background thread.
+find_package(Threads REQUIRED)
+target_link_libraries(foundry_shell_core PUBLIC Threads::Threads)
 
 add_executable(foundry_shell
   src/main.cpp
@@ -95,15 +98,21 @@ target_link_libraries(foundry_execution_service_integration_test PRIVATE foundry
 add_test(NAME foundry_execution_service_integration
   COMMAND foundry_execution_service_integration_test ${CMAKE_SOURCE_DIR})
 
+add_executable(foundry_shell_hub_job_test ../tests/shell_hub_job_test.cpp)
+target_compile_features(foundry_shell_hub_job_test PRIVATE cxx_std_20)
+target_link_libraries(foundry_shell_hub_job_test PRIVATE foundry_shell_core)
+add_test(NAME foundry_shell_hub_job COMMAND foundry_shell_hub_job_test)
+
 add_executable(foundry_shell_plan_service_contract_test
   ../tests/shell_plan_service_contract_test.cpp
   ../src/execution/service.cpp
   ../src/execution/checkpoint_inspection.cpp
+  ../src/execution/hub_worker.cpp
   src/plan_service.cpp
 )
 target_compile_features(foundry_shell_plan_service_contract_test PRIVATE cxx_std_20)
 target_include_directories(foundry_shell_plan_service_contract_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(foundry_shell_plan_service_contract_test PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(foundry_shell_plan_service_contract_test PRIVATE nlohmann_json::nlohmann_json Threads::Threads)
 add_test(NAME foundry_shell_plan_service_contract COMMAND foundry_shell_plan_service_contract_test)
 
 if(WIN32)

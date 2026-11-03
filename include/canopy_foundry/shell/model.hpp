@@ -4,11 +4,15 @@
 #include "canopy_foundry/shell/simulation.hpp"
 
 #include <filesystem>
+#include <functional>
+#include <memory>
 #include <string>
 
 namespace canopy_foundry { struct LocalOperationResult; }
 
 namespace canopy_foundry::shell {
+
+struct HubJobTask;
 
 enum class View {
     Overview,
@@ -70,6 +74,8 @@ struct ShellState {
     DocumentSummary document;
     PlanSummary plan;
     std::string local_run_id;
+    // One worker attempt in flight.
+    std::shared_ptr<HubJobTask> hub_job;
     std::string status{"Ready. No local document loaded."};
 };
 
@@ -90,6 +96,13 @@ void apply_start_result(ShellState& state, const LocalOperationResult& result);
 void start_selected_run(ShellState& state);
 void refresh_selected_run(ShellState& state);
 void cancel_selected_run(ShellState& state);
+// Starts the worker once in the background; independent of the selected request.
+void start_next_hub_job(ShellState& state);
+// Same with an explicit runner (used by tests); the runner executes off the UI thread.
+void start_next_hub_job(ShellState& state, std::function<LocalOperationResult()> runner);
+// Applies a finished attempt to the status line; true when the state changed.
+bool poll_next_hub_job(ShellState& state);
+[[nodiscard]] inline bool hub_job_active(const ShellState& state) noexcept { return state.hub_job != nullptr; }
 
 [[nodiscard]] const char* view_name(View view) noexcept;
 [[nodiscard]] bool frontend_available(const std::filesystem::path& root);
