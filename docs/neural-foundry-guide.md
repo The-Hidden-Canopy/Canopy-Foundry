@@ -334,6 +334,19 @@ match the Hub's `NEURAL_FORGE_LEADERBOARD_ATTESTATION_KEY`; it signs only the
 run ID and already-sanitized vendor/model/fingerprint envelope. Missing or
 forged signatures make the run ineligible for publication.
 
+### Run the worker once from Foundry
+
+`foundry run-next-hub-job` (and the shell's **Run next job** button) runs this
+worker once with `--once --once-report`; Foundry never chooses a job and never
+uses a local request file. Configure the worker through the `NEURAL_FORGE_*`
+environment settings above; they are inherited, never placed on a command line.
+Set `CANOPY_FOUNDRY_ROOT` if the executable is not inside this checkout and
+`CANOPY_FOUNDRY_PYTHON` to choose the interpreter. Output goes to
+`runs/hub-next/worker.log`. Exit codes: `0` succeeded; `1` the worker failed or
+the job ended `failed` or `cancelled`; `4` nothing was queued, configuration is
+missing, or the outcome is unconfirmed. Success does not imply evaluation or
+promotion.
+
 The worker accepts only Hub-issued opaque references. It translates each
 external training profile to a distinct local profile through the deployment
 map, resolves dataset/model/checkpoint IDs through the local binding, verifies

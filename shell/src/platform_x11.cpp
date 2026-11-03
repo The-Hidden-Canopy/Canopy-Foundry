@@ -508,7 +508,9 @@ void render(Display* display, Window window, GC gc, ShellState& state, int width
         text(display, window, gc, "Run", left + 127, 701, body);
         panel(display, window, gc, left + 219, 676, left + 309, 716, raised, border_strong);
         text(display, window, gc, "Cancel", left + 229, 701, body);
-        text(display, window, gc, "Execution unavailable; see Help.", left + 322, 701, amber);
+        panel(display, window, gc, left + 321, 676, left + 481, 716, raised, border_strong);
+        text(display, window, gc, hub_job_active(state) ? "Job running" : "Run next job", left + 331, 701, body);
+        text(display, window, gc, "Local Run unavailable; see Help.", left + 493, 701, amber);
     } else if (state.view == View::Capabilities) {
         text(display, window, gc, "Capabilities", left, 155, bright);
         text(display, window, gc, "CATALOG != RUNTIME", right - 145, 155, amber);
@@ -663,7 +665,7 @@ void render(Display* display, Window window, GC gc, ShellState& state, int width
     text(display, window, gc, state.document.loaded ? state.document.type : "Waiting for local JSON", rail_left, 377, muted);
     line(display, window, gc, rail_left, 418, width - 26, 418, border);
     text(display, window, gc, "LOCAL GUARANTEES", rail_left, 446, deep);
-    text(display, window, gc, "OK  No network calls", rail_left, 478, body);
+    text(display, window, gc, "OK  Network only via Run next job", rail_left, 478, body);
     text(display, window, gc, "OK  No runtime claims", rail_left, 502, body);
     text(display, window, gc, "OK  No authority expansion", rail_left, 526, body);
     text(display, window, gc, "OK  Source stays local", rail_left, 550, body);
@@ -769,6 +771,11 @@ int run_native_shell(ShellState& state) {
                        event.xbutton.x < kLeftWidth + 45 + 309 &&
                        event.xbutton.y >= 676 && event.xbutton.y < 716) {
                 cancel_selected_run(state);
+            } else if (state.view == View::Plan &&
+                       event.xbutton.x >= kLeftWidth + 45 + 321 &&
+                       event.xbutton.x < kLeftWidth + 45 + 481 &&
+                       event.xbutton.y >= 676 && event.xbutton.y < 716) {
+                start_next_hub_job(state);
             } else if (state.view == View::Overview &&
                        event.xbutton.x >= kLeftWidth + 45 + 157 &&
                        event.xbutton.x < kLeftWidth + 45 + 267 &&
@@ -811,6 +818,7 @@ int run_native_shell(ShellState& state) {
             const auto previous_animation = state.animation_tick++;
             const auto previous_simulation = state.simulation.tick;
             advance_simulation(state.simulation);
+            if (poll_next_hub_job(state)) needs_redraw = true;
             const bool show_simulation = !state.guide_visible && state.view == View::Simulation;
             const bool show_companion = state.companion_visible &&
                 (state.guide_visible || state.view == View::Overview || show_simulation);

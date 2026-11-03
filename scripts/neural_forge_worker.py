@@ -2448,7 +2448,41 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-output-bytes", type=int, default=int(os.environ.get("NEURAL_FORGE_MAX_OUTPUT_BYTES", str(DEFAULT_MAX_NATIVE_OUTPUT_BYTES))))
     parser.add_argument("--max-output-files", type=int, default=int(os.environ.get("NEURAL_FORGE_MAX_OUTPUT_FILES", str(DEFAULT_MAX_NATIVE_OUTPUT_FILES))))
     parser.add_argument("--once", action="store_true", help="claim at most one job and exit")
+    parser.add_argument(
+        "--once-report",
+        type=Path,
+        default=None,
+        help="with --once, write whether a job was claimed and its final run status",
+    )
     return parser
+
+
+ONCE_REPORT_SCHEMA = "canopy_foundry.worker_once_report.v1"
+
+
+def write_once_report(path: Path, client: HubClient, job: dict[str, Any] | None) -> None:
+    """Record whether one --once attempt claimed a job, its run ID and final status.
+
+    The worker manifest and descriptors are never written; an unconfirmed status is null.
+    """
+
+    run_id = job.get("run_id") if job is not None else None
+    hub_status = None
+    if run_id is not None:
+        try:
+            hub_status = client.get_worker_run(run_id)["run"]["status"]
+        except WorkerError:
+            hub_status = None
+    report = {
+        "schema": ONCE_REPORT_SCHEMA,
+        "claimed": job is not None,
+        "run_id": run_id,
+        "hub_status": hub_status,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
 
 
 def main() -> int:
@@ -2487,12 +2521,16 @@ def main() -> int:
             max_output_bytes=args.max_output_bytes,
             max_output_files=args.max_output_files,
         )
+        if args.once_report is not None and not args.once:
+            raise WorkerError("--once-report requires --once")
         client = HubClient(config)
         while True:
             job = client.claim()
             if job is not None:
                 execute_job(job, config, client)
             if args.once:
+                if args.once_report is not None:
+                    write_once_report(args.once_report, client, job)
                 return 0
             time.sleep(config.poll_seconds)
     except WorkerError as exc:
