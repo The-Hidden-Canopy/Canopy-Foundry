@@ -130,6 +130,14 @@ Both shells expose the same controls: `S` starts or restarts the simulation,
 and synthetic on both platforms: it does not launch training, contact the
 Hub, write checkpoints, or create execution evidence.
 
+The separate **Run next job** control and `foundry run-next-hub-job` command
+start the configured Hub worker once; they do not use the selected local
+request or choose a job. The worker may claim an existing Hub-issued job and
+uses configured local bindings. An empty queue, missing configuration, or
+unconfirmed outcome is not a successful run. See the [worker guide](docs/neural-foundry-guide.md#run-the-worker-once-from-foundry)
+for configuration and exit codes. Worker success alone does not authorize
+evaluation or promotion.
+
 Users bring their own:
 
 - architecture configuration

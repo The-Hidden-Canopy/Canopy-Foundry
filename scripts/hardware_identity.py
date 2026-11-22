@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import hmac
+import json
 import os
 from pathlib import Path
 import re
@@ -18,7 +19,7 @@ from typing import Any, Callable, Mapping
 
 MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._()+/-]{0,127}$")
 MAX_DEVICE = 255
-_EXPECTED_TOOLS = {"nvidia": "nvidia-smi", "amd": "rocm-smi"}
+_EXPECTED_TOOLS = {"nvidia": frozenset({"nvidia-smi"}), "amd": frozenset({"rocm-smi", "amd-smi"})}
 _ENVIRONMENT_KEYS = {"SystemRoot", "WINDIR", "TEMP", "TMP"}
 
 
@@ -85,6 +86,101 @@ def _identity_from_rows(rows: list[list[str]], vendor: str) -> tuple[str, str] |
     return None
 
 
+def supported_probe_name(vendor: str, name: str) -> bool:
+    """Keep local binding and execution on the same explicit tool allowlist."""
+    return name.lower() in _EXPECTED_TOOLS.get(vendor, frozenset())
+
+
+def _amd_smi_records(output: str) -> list[dict[str, Any]] | None:
+    # ROCm 7.2 uses a list for `list` and gpu_data for `static`.
+    # Do not accept duplicate JSON keys or a diagnostic prefix as evidence.
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate field")
+            result[key] = value
+        return result
+
+    def invalid_constant(_value):
+        raise ValueError("nonfinite value")
+
+    if not isinstance(output, str) or len(output) > 65536:
+        return None
+    try:
+        value = json.loads(output, object_pairs_hook=unique_object, parse_constant=invalid_constant)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    if isinstance(value, dict):
+        if set(value) != {"gpu_data"}:
+            return None
+        value = value["gpu_data"]
+    if not isinstance(value, list) or not value or len(value) > MAX_DEVICE + 1:
+        return None
+    if any(not isinstance(row, dict) for row in value):
+        return None
+    return value
+
+
+def _device_index(value: Any) -> int | None:
+    return value if type(value) is int and 0 <= value <= MAX_DEVICE else None
+
+
+def _amd_smi_identity(
+    tool: Path, device: int, runner: Callable[..., Any], *, hip_device: bool,
+) -> tuple[str, str] | None:
+    def read(arguments):
+        try:
+            result = runner(
+                [str(tool), *arguments], capture_output=True, text=True,
+                timeout=10, check=False, env=sanitized_probe_environment(),
+            )
+        except (OSError, subprocess.SubprocessError, TypeError):
+            return None
+        if getattr(result, "returncode", 1) != 0:
+            return None
+        return _amd_smi_records(getattr(result, "stdout", ""))
+
+    smi_device = device
+    expected_bdf = None
+    if hip_device:
+        # HIP ordinals and SMI indices are different namespaces, especially
+        # with partitioned devices. Never attest the same numeric SMI index.
+        rows = read(["list", "-e", "--json"])
+        if rows is None:
+            return None
+        matches = [row for row in rows if _device_index(row.get("hip_id")) == device]
+        if len(matches) != 1:
+            return None
+        smi_device = _device_index(matches[0].get("gpu"))
+        expected_bdf = matches[0].get("bdf")
+        if smi_device is None or not isinstance(expected_bdf, str) or not re.fullmatch(
+            r"[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]", expected_bdf
+        ):
+            return None
+        if sum(_device_index(row.get("gpu")) == smi_device for row in rows) != 1:
+            return None
+
+    rows = read(["static", "--gpu", str(smi_device), "--asic", "--bus", "--json"])
+    if rows is None or len(rows) != 1 or _device_index(rows[0].get("gpu")) != smi_device:
+        return None
+    row = rows[0]
+    if expected_bdf is not None:
+        bus = row.get("bus")
+        if not isinstance(bus, dict) or str(bus.get("bdf", "")).lower() != expected_bdf.lower():
+            return None
+    asic = row.get("asic")
+    if not isinstance(asic, dict) or str(asic.get("vendor_id", "")).lower() != "0x1002":
+        return None
+    model = _clean_model(asic.get("market_name"))
+    raw_id = _clean_raw_id(asic.get("asic_serial"))
+    if not model or model.lower() in {"n/a", "unknown"} or not raw_id:
+        return None
+    if raw_id.lower() in {"0", "0x0"}:
+        return None
+    return model, raw_id
+
+
 def _fingerprint(key: str, vendor: str, model: str, raw_id: str) -> str:
     message = f"{vendor}\x00{model}\x00{raw_id}".encode("utf-8")
     return hmac.new(key.encode("utf-8"), message, hashlib.sha256).hexdigest()
@@ -112,7 +208,7 @@ def _trusted_tool(tools: Mapping[str, str | Path] | None, vendor: str) -> Path |
         not tool.is_absolute()
         or tool.is_symlink()
         or not tool.is_file()
-        or tool.stem.lower() != expected
+        or tool.stem.lower() not in expected
     ):
         return None
     return tool
@@ -123,6 +219,7 @@ def probe_hardware(
     key: str | None,
     *,
     expected_vendor: str | None = None,
+    hip_device: bool = False,
     tools: Mapping[str, str | Path] | None = None,
     runner: Callable[..., Any] = subprocess.run,
 ) -> dict[str, str] | None:
@@ -134,6 +231,8 @@ def probe_hardware(
     leaderboard; it does not fail training. Ambient PATH lookup is never used.
     """
 
+    if type(hip_device) is not bool or (hip_device and expected_vendor != "amd"):
+        return None
     if expected_vendor not in {None, "nvidia", "amd"}:
         return None
     if isinstance(device, bool) or not isinstance(device, int) or not 0 <= device <= MAX_DEVICE:
@@ -149,6 +248,15 @@ def probe_hardware(
             continue
         tool = _trusted_tool(tools, vendor)
         if tool is None:
+            continue
+        if vendor == "amd" and tool.stem.lower() == "amd-smi":
+            parsed = _amd_smi_identity(tool, device, runner, hip_device=hip_device)
+            if parsed is None:
+                continue
+            model, raw_id = parsed
+            return {"vendor": vendor, "model": model, "fingerprint": _fingerprint(key, vendor, model, raw_id)}
+        if hip_device:
+            # Legacy ROCm SMI has no verified HIP-to-SMI mapping here.
             continue
         command = [str(tool), *arguments]
         try:
@@ -172,4 +280,4 @@ def probe_hardware(
     return None
 
 
-__all__ = ["probe_hardware", "sanitized_probe_environment"]
+__all__ = ["probe_hardware", "sanitized_probe_environment", "supported_probe_name"]

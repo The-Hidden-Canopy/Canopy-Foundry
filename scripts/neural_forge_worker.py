@@ -53,7 +53,7 @@ try:
         LocalRunReceiptStore,
         canonical_fingerprint,
     )
-    from scripts.hardware_identity import probe_hardware
+    from scripts.hardware_identity import probe_hardware, supported_probe_name
     from scripts.local_binding import (
         BindingError,
         file_sha256,
@@ -84,7 +84,7 @@ except ModuleNotFoundError:
         LocalRunReceiptStore,
         canonical_fingerprint,
     )
-    from hardware_identity import probe_hardware
+    from hardware_identity import probe_hardware, supported_probe_name
     from local_binding import BindingError, file_sha256, load_capability_catalog, load_local_binding, path_sha256
 
 RUN_ID_RE = re.compile(r"^nf-[a-z0-9-]{8,80}$", re.IGNORECASE)
@@ -627,8 +627,7 @@ def hardware_probe_tools(binding: dict[str, Any], config: "WorkerConfig") -> dic
             )
         except (WorkerError, KeyError):
             continue
-        expected_name = "nvidia-smi" if vendor == "nvidia" else "rocm-smi"
-        if candidate.stem.lower() != expected_name:
+        if not supported_probe_name(vendor, candidate.stem):
             continue
         tools[vendor] = candidate
     return tools
@@ -665,6 +664,7 @@ def manifest_private_adapter_local_request(
                 "bound_asset": bound_asset,
                 "binary_sha256": binary_sha256,
                 "hardware_probe_tools": hardware_probe_tools,
+                "resolve_private_runtime": resolve_private_runtime,
             },
         )
     except Exception as exc:
@@ -1751,6 +1751,7 @@ def completed_metrics(
     private_adapter_native: bool = False,
     adapter: Any | None = None,
     native_descriptor: dict[str, Any] | None = None,
+    expected_device: int | None = None,
 ) -> bool:
     metric_backend = {"cpu": "native_cpu", "opencl": "native_opencl"}.get(backend)
     for filename in ("metrics.json", "status.json"):
@@ -1760,9 +1761,18 @@ def completed_metrics(
             continue
         if not isinstance(payload, dict):
             continue
+        if private_adapter_native:
+            if filename != "metrics.json" or adapter is None:
+                continue
+            if backend == "hip" and expected_device is not None and (
+                type(payload.get("device_index")) is not int or payload["device_index"] != expected_device
+            ):
+                return False
+            try:
+                return adapter.valid_metrics(payload, native_descriptor or {}) is True
+            except (ValueError, TypeError, KeyError, PrivateAdapterError):
+                return False
         if filename == "metrics.json" and _valid_native_metrics(payload, output_path, backend):
-            return True
-        if filename == "metrics.json" and private_adapter_native and adapter is not None and adapter.valid_metrics(payload, native_descriptor or {}):
             return True
         if (
             filename == "metrics.json"
@@ -1871,7 +1881,7 @@ def optional_leaderboard_attestation(job: dict[str, Any], config: WorkerConfig) 
     try:
         _request, _config_path, _dataset_path, resolved = manifest_local_request(job, config)
         backend = resolved["execution"]["backend"]
-        if backend not in {"cuda", "opencl"}:
+        if backend not in {"cuda", "opencl", "hip"}:
             return None
         expected_vendor = "nvidia" if backend == "cuda" else "amd"
         attestation = probe_hardware(
@@ -1879,6 +1889,7 @@ def optional_leaderboard_attestation(job: dict[str, Any], config: WorkerConfig) 
             config.gpu_fingerprint_key,
             expected_vendor=expected_vendor,
             tools=resolved.get("hardware_probe_tools"),
+            **({"hip_device": True} if backend == "hip" else {}),
         )
         if attestation is None:
             return None
@@ -2292,6 +2303,7 @@ def execute_job(job: dict[str, Any], config: WorkerConfig, client: HubClient) ->
         private_adapter_native=private_adapter_native,
         adapter=private_adapter,
         native_descriptor=native_descriptor,
+        expected_device=resolved_manifest.get("device"),
     )
     native_execution_evidence: dict[str, Any] | None = None
     if private_adapter_native and metrics_available:

@@ -11,7 +11,7 @@ publication belong to the governed external wrapper. The public runtime has a
 separate, bounded kernel-telemetry export that is disabled by default and is
 local unless an operator explicitly hands its bundle to `IDA_CLI-Public`.
 
-The execution contract has three explicit backend identifiers: full CUDA, AMD
+The public execution contract has three explicit backend identifiers: full CUDA, AMD
 OpenCL smoke, and native CPU smoke. Only CUDA is currently enabled for
 training. The Hub may queue a bounded native job, and the
 local Neural Forge worker—the local Neural Foundry implementation component—
@@ -366,7 +366,7 @@ local execution fields are rejected.
 
 Local bindings are schema v2 and require a SHA-256 pin for every config,
 dataset, model, checkpoint, and native binary. An optional `hardware_probes`
-collection can pin deployment-owned `nvidia-smi`/`rocm-smi` tools under the
+collection can pin deployment-owned `nvidia-smi`/`amd-smi`/`rocm-smi` tools under the
 ignored probe root. The binary must match both the Hub attestation and the
 deployment-owned `binaries` entry. The worker passes only neutral system/temp
 variables to native children and probes; `PATH`, loader variables, credentials,
@@ -405,7 +405,7 @@ completed cancellation. The local CLI and shell do not yet provide Run/Cancel.
 For an explicitly opted-in leaderboard run, the Hub claim projection includes
 only `leaderboard_requested`. After a successful run, the worker may query the
 selected local device with fixed arguments to an absolute, hash-pinned
-`nvidia-smi` or `rocm-smi` tool from `hardware_probes`. The worker discards the
+`nvidia-smi`, `amd-smi` or `rocm-smi` tool from `hardware_probes`. The worker discards the
 raw UUID/serial, HMACs it with the deployment-only
 `NEURAL_FORGE_GPU_FINGERPRINT_KEY`, and sends only `vendor`, sanitized `model`,
 and `fingerprint` in the final update. Missing drivers or a missing key make
@@ -625,7 +625,8 @@ after a successful, evaluator-gated run. Configure
 `NEURAL_FORGE_LEADERBOARD_ID_KEY` in the Hub and
 `NEURAL_FORGE_LEADERBOARD_ATTESTATION_KEY` on the Hub together with
 `NEURAL_FORGE_GPU_FINGERPRINT_KEY` on each worker as separate deployment
-secrets. The worker maps CUDA to an NVIDIA probe and OpenCL to an AMD probe;
+secrets. The worker maps CUDA to an NVIDIA probe and OpenCL to an AMD probe.
+The private HIP route requires AMD SMI with verified HIP ordinal mapping;
 an unexpected vendor is ineligible. Never put any key in a manifest, binding,
 catalog, or native request.
 

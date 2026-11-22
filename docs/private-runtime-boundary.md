@@ -66,10 +66,36 @@ automatically. An operator-configured adapter is a separate execution path:
    performance only for matched workload, hardware, precision roles, and
    timing scope; measurements from another engine are not Foundry receipts.
 
+The adapter returns the generic `private_execution`, `private_execution_kind`,
+and `private_contract` bindings consumed by the worker. If a manifest selects a
+private runtime package, the adapter uses the worker's package verifier and
+retains its binary-bound result; it must not discard that requirement. Private
+completion is decided only by the configured adapter's metrics validator,
+never by a public metrics or status-file fallback. HIP completion also checks
+the observed device index against the local device selection.
+
 For local inspection, load the native `foundry capabilities` JSON output into
 the console's Capabilities view. It displays the selected document's states
 and evidence tiers, not a live device probe. The public catalog can also be
 loaded, but catalog membership does not attest a local binary or execution.
+
+An admitted private HIP adapter may use the existing opt-in hardware identity
+path. The local `hardware_probes.amd` binding accepts a hash-pinned `amd-smi`
+or the legacy `rocm-smi` executable. No tool is discovered through PATH, and
+no driver, runtime, or Python package is installed by the worker.
+
+For HIP, `amd-smi list -e --json` must uniquely map the selected HIP ordinal
+to an SMI GPU index and PCI address. The subsequent read-only static query
+must return that same GPU and PCI address. Legacy ROCm SMI cannot establish
+this mapping here, so HIP attestation remains unavailable with that tool.
+Missing, ambiguous, malformed or mismatched records are not hardware evidence.
+Only the sanitized model and keyed fingerprint leave the helper; raw ASIC
+serials and PCI addresses are not added to the Hub result.
+
+This follows the [ROCm 7.2 AMD SMI CLI contract](https://rocm.docs.amd.com/projects/amdsmi/en/docs-7.2.0/how-to/amdsmi-cli-tool.html).
+The identity path does not build or enable HIP training, qualify a toolkit,
+relax private adapter admission, or establish model/optimizer parity. Native
+ROCm compilation and target-GPU execution remain separate acceptance checks.
 
 ## Retry and idempotency
 

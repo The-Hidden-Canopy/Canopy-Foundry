@@ -33,6 +33,20 @@ but its public profile is also disabled because it only implements AdamW. Its
 CPU kernel source is `kernels/cpu_amd_smoke.cpp`; it contains an AMD-friendly
 AVX2/FMA dot product and a scalar fallback selected at runtime.
 
+## Admission follow-ups
+
+- [ ] Implement and validate the admitted Lion optimizer on each portable
+  backend before proposing profile enablement. The worker compatibility
+  policy currently advertises no supported optimizer for CPU or OpenCL.
+- [ ] Test backend/profile admission, optimizer rejection, checkpoint and
+  resume boundaries, and explicit unsupported-precision errors end to end.
+  Record CPU and actual supported-device results separately; a build or
+  synthetic smoke alone does not establish hardware or training capability.
+- [ ] Review Hub, worker, adapter and native request contracts together before
+  changing enablement. Preserve job admission and audit/receipt behavior.
+
+These items do not enable either profile or promote training results.
+
 ## Build and run
 
 With the Windows OpenCL development headers/import library and a C++20 build
