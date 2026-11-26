@@ -856,7 +856,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
                 open_document(window);
                 return 0;
             } else if (w_param == VK_ESCAPE) {
-                DestroyWindow(window);
+                SendMessageW(window, WM_CLOSE, 0, 0);
                 return 0;
             }
             InvalidateRect(window, nullptr, FALSE);
