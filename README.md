@@ -373,3 +373,7 @@ datasets, checkpoints, credentials, and other sensitive training assets remain
 local while the Hidden Canopy Hub provides a narrow coordination boundary for
 approved workloads. Public runtime code remains in the repository as the
 capability being shared.
+
+## Download availability
+
+Official Hidden Canopy catalog: [Current download availability](https://thehiddencanopy.com/downloads.html#canopy-foundry). Source/build instructions above remain the reference for this repository.
