@@ -348,7 +348,7 @@ void render(Display* display, Window window, GC gc, ShellState& state, int width
     fill(display, window, gc, 0, 0, width, height, bg);
     fill(display, window, gc, 0, 0, width, kTopHeight, bg);
     line(display, window, gc, 0, kTopHeight - 1, width, kTopHeight - 1, border);
-    text(display, window, gc, "CANOPY FOUNDRY", 61, 27, bright);
+    text(display, window, gc, "NEURAL FOUNDRY", 61, 27, bright);
     text(display, window, gc, "NATIVE LOCAL SHELL", 61, 45, muted);
     fill(display, window, gc, 24, 24, 9, 18, teal);
     fill(display, window, gc, 37, 20, 9, 22, teal);
@@ -403,7 +403,7 @@ void render(Display* display, Window window, GC gc, ShellState& state, int width
     const int left = kLeftWidth + 45;
     const int right = width - kRightWidth - 28;
     const auto ida_card = companion_card_size(right - left);
-    text(display, window, gc, "CANOPY FOUNDRY / " + std::string(view_name(state.view)),
+    text(display, window, gc, "NEURAL FOUNDRY / " + std::string(view_name(state.view)),
          left, 98, muted);
     if (state.guide_visible) {
         text(display, window, gc, "WELCOME TO FOUNDRY", left, 143, teal);
@@ -425,7 +425,7 @@ void render(Display* display, Window window, GC gc, ShellState& state, int width
         text(display, window, gc, state.status, left, 660, muted);
         text(display, window, gc, state.view == View::Plan ? "Here: resolve request or inspect resume." : "Here: choose Train Brain to open planning.", left, 550, amber);
         panel(display, window, gc, left, 580, left + 145, 620, raised, border_strong);
-        text(display, window, gc, "Continue", left + 12, 605, bright);
+        text(display, window, gc, "Continue (Enter)", left + 12, 605, bright);
         text(display, window, gc, "Reopen with H or Help / Guide", left + 160, 605, muted);
     } else if (state.view == View::Overview) {
         text(display, window, gc, "LOCAL EXECUTION / INSPECTABLE BY DEFAULT", left, 143, teal);
@@ -669,7 +669,7 @@ void render(Display* display, Window window, GC gc, ShellState& state, int width
     text(display, window, gc, "OK  No runtime claims", rail_left, 502, body);
     text(display, window, gc, "OK  No authority expansion", rail_left, 526, body);
     text(display, window, gc, "OK  Source stays local", rail_left, 550, body);
-    text(display, window, gc, "CANOPY FOUNDRY", rail_left, height - 58, deep);
+    text(display, window, gc, "NEURAL FOUNDRY", rail_left, height - 58, deep);
     text(display, window, gc, "PUBLIC LOCAL SURFACE", rail_left, height - 36, deep);
 }
 
@@ -685,7 +685,7 @@ int run_native_shell(ShellState& state) {
         background, background);
     // Do not clear the visible window ahead of the completed back buffer.
     XSetWindowBackgroundPixmap(display, window, None);
-    XStoreName(display, window, "Canopy Foundry - Native Shell");
+    XStoreName(display, window, "Neural Foundry - Native Shell");
     XSelectInput(
         display, window,
         ExposureMask | StructureNotifyMask | ButtonReleaseMask | KeyPressMask);
@@ -796,7 +796,7 @@ int run_native_shell(ShellState& state) {
                     else state.guide_visible = true;
                 } else if (state.guide_visible) {
                     if (key == XK_1 || key == XK_2) open_guide_document(state, key == XK_1 ? GuideDocument::Starter : GuideDocument::Foundry);
-                    else if (key == XK_Escape) close_guide(state);
+                    else if (key == XK_Escape || key == XK_Return || key == XK_KP_Enter) close_guide(state);
                     continue;
                 } else if (key == XK_Escape || key == XK_q) {
                     running = false;

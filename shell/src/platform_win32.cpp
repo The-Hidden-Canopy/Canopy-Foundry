@@ -239,7 +239,7 @@ void draw_header(HDC dc, int width) {
     fill(dc, RECT{27, 31, 32, 42}, color(85, 213, 197));
     fill(dc, RECT{35, 26, 40, 42}, color(85, 213, 197));
     fill(dc, RECT{43, 22, 48, 42}, color(85, 213, 197));
-    draw_text(dc, "CANOPY FOUNDRY", 61, 17, 260, 18, 12, color(231, 237, 243), true);
+    draw_text(dc, "NEURAL FOUNDRY", 61, 17, 260, 18, 12, color(231, 237, 243), true);
     draw_text(dc, "NATIVE LOCAL SHELL", 61, 36, 260, 14, 8, color(116, 130, 148));
     fill(dc, RECT{width - 144, 30, width - 137, 37}, color(55, 110, 185));
     draw_text(dc, "LOCAL ONLY", width - 128, 27, 77, 16, 9, color(116, 130, 148), true);
@@ -322,7 +322,7 @@ void draw_overview(HDC dc, int left, int right, int height) {
     const auto ida_card = companion_card_size(right - left);
     const int copy_width = std::max(1, std::min(410, right - left -
         (g_state->companion_visible ? ida_card.width + 18 : 0)));
-    draw_text(dc, "CANOPY FOUNDRY / OVERVIEW", left, 92, right - left, 18, 9, color(116, 130, 148), true);
+    draw_text(dc, "NEURAL FOUNDRY / OVERVIEW", left, 92, right - left, 18, 9, color(116, 130, 148), true);
     draw_text(dc, "LOCAL EXECUTION / INSPECTABLE BY DEFAULT", left, 132, right - left, 18, 10, color(85, 213, 197), true);
     draw_text(dc, "Make the execution contract visible.", left, 161, copy_width, 92,
               copy_width < 300 ? 24 : 34, color(231, 237, 243), false, DT_WORDBREAK);
@@ -349,7 +349,7 @@ void draw_overview(HDC dc, int left, int right, int height) {
 }
 
 void draw_plan(HDC dc, int left, int right) {
-    draw_text(dc, g_state->mode == WorkspaceMode::TrainBrain ? "WEAVE / BRAIN TRAINING" : "CANOPY FOUNDRY / PLAN LENS", left, 92, right - left, 18, 9, color(116, 130, 148), true);
+    draw_text(dc, g_state->mode == WorkspaceMode::TrainBrain ? "WEAVE / BRAIN TRAINING" : "NEURAL FOUNDRY / PLAN LENS", left, 92, right - left, 18, 9, color(116, 130, 148), true);
     draw_text(dc, "Plan lens", left, 122, 500, 48, 36, color(231, 237, 243), false);
     draw_text(dc, "DISPLAYED CONTRACT IS NOT PROOF OF EXECUTION", left + 230, 140, 300, 18, 9, color(240, 174, 104), true);
     const int column = std::max(1, (right - left - 30) / 3);
@@ -410,7 +410,7 @@ void draw_plan(HDC dc, int left, int right) {
 }
 
 void draw_capabilities(HDC dc, int left, int right) {
-    draw_text(dc, "CANOPY FOUNDRY / CAPABILITIES", left, 92, right - left, 18, 9, color(116, 130, 148), true);
+    draw_text(dc, "NEURAL FOUNDRY / CAPABILITIES", left, 92, right - left, 18, 9, color(116, 130, 148), true);
     draw_text(dc, "Capabilities", left, 122, 500, 48, 36, color(231, 237, 243), false);
     draw_text(dc, "CATALOG != RUNTIME", right - 150, 143, 150, 16, 9, color(240, 174, 104), true, DT_RIGHT);
     const int top = 204;
@@ -437,7 +437,7 @@ void draw_capabilities(HDC dc, int left, int right) {
 }
 
 void draw_evidence(HDC dc, int left, int right) {
-    draw_text(dc, "CANOPY FOUNDRY / EVIDENCE", left, 92, right - left, 18, 9, color(116, 130, 148), true);
+    draw_text(dc, "NEURAL FOUNDRY / EVIDENCE", left, 92, right - left, 18, 9, color(116, 130, 148), true);
     draw_text(dc, "Evidence stages", left, 122, 500, 48, 36, color(231, 237, 243), false);
     draw_text(dc, "NO FLATTENING", right - 120, 143, 120, 16, 9, color(85, 213, 197), true, DT_RIGHT);
     const char* labels[] = {"Requested", "Resolved", "Accepted", "Observed", "Persisted"};
@@ -464,7 +464,7 @@ void draw_evidence(HDC dc, int left, int right) {
 }
 
 void draw_boundaries(HDC dc, int left, int right) {
-    draw_text(dc, "CANOPY FOUNDRY / OWNERSHIP", left, 92, right - left, 18, 9, color(116, 130, 148), true);
+    draw_text(dc, "NEURAL FOUNDRY / OWNERSHIP", left, 92, right - left, 18, 9, color(116, 130, 148), true);
     draw_text(dc, "What belongs where", left, 122, 500, 48, 36, color(231, 237, 243), false);
     const int gap = 15;
     const int column = (right - left - gap) / 2;
@@ -512,7 +512,7 @@ void draw_simulation(HDC dc, int left, int right, int height) {
     const int work_right = right - (g_state->companion_visible ? ida_card.width + 18 : 0);
     const int active_stage = simulation_stage_index(g_state->simulation.stage);
 
-    draw_text(dc, "CANOPY FOUNDRY / EXECUTION THEATER", left, 92, right - left, 18, 9, muted, true);
+    draw_text(dc, "NEURAL FOUNDRY / EXECUTION THEATER", left, 92, right - left, 18, 9, muted, true);
     draw_text(dc, "SIMULATION: " + std::string(simulation_status_name(g_state->simulation)) + " / SYNTHETIC",
               left, 122, work_right - left, 18, 10, amber, true);
     draw_ida_card(dc, right - ida_card.width, 132, right, 132 + ida_card.height);
@@ -609,7 +609,7 @@ void draw_center(HDC dc, int width, int height) {
         draw_text(dc, g_state->status, left, 635, right - left, 38, 10, color(116, 130, 148), false, DT_WORDBREAK);
         draw_text(dc, g_state->view == View::Plan ? "Here: resolve the selected request or inspect its resume." : "Here: use Train Brain to open the planning workspace.",
                   left, 552, right - left, 18, 10, color(240, 174, 104));
-        button(dc, "Continue", left, 580, 145, true);
+        button(dc, "Continue (Enter)", left, 580, 145, true);
         draw_text(dc, "Reopen with H or Help / Guide", left + 160, 590, 260, 20, 10, color(116, 130, 148));
         return;
     }
@@ -660,7 +660,7 @@ void draw_right_rail(HDC dc, int width, int height) {
     draw_text(dc, "LOCAL GUARANTEES", left + 26, 446, 210, 16, 9, color(82, 96, 113), true);
     draw_text(dc, "OK  Network only via Run next job\nOK  No runtime claims\nOK  No authority expansion\nOK  Source stays local",
               left + 26, 476, kRightWidth - 52, 92, 10, color(185, 197, 209), false, DT_WORDBREAK);
-    draw_text(dc, "CANOPY FOUNDRY", left + 26, height - 58, 210, 16, 9, color(82, 96, 113), true);
+    draw_text(dc, "NEURAL FOUNDRY", left + 26, height - 58, 210, 16, 9, color(82, 96, 113), true);
     draw_text(dc, "PUBLIC LOCAL SURFACE", left + 26, height - 36, 210, 16, 8, color(82, 96, 113));
 }
 
@@ -836,7 +836,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
                     InvalidateRect(window, nullptr, FALSE);
                     return 0;
                 }
-                if (w_param == VK_ESCAPE) { close_guide(*g_state); InvalidateRect(window, nullptr, FALSE); }
+                if (w_param == VK_ESCAPE || w_param == VK_RETURN) { close_guide(*g_state); InvalidateRect(window, nullptr, FALSE); }
                 return 0;
             }
             if (w_param == '1') g_state->view = View::Overview;
@@ -893,8 +893,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
         case WM_CLOSE:
             // The worker runs in this process's containment; closing stops it.
             if (g_state != nullptr && hub_job_active(*g_state) &&
-                MessageBoxW(window, L"A job is running. Closing Canopy Foundry stops it. Close anyway?",
-                            L"Canopy Foundry", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+                MessageBoxW(window, L"A job is running. Closing Neural Foundry stops it. Close anyway?",
+                            L"Neural Foundry", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
                 return 0;
             DestroyWindow(window);
             return 0;
@@ -921,7 +921,7 @@ int run_native_shell(ShellState& state) {
     if (RegisterClassW(&window_class) == 0) return 2;
 
     HWND window = CreateWindowExW(
-        0, class_name, L"Canopy Foundry - Native Shell",
+        0, class_name, L"Neural Foundry - Native Shell",
         WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
         1280, 800, nullptr, nullptr, window_class.hInstance, nullptr);
     if (window == nullptr) return 2;
