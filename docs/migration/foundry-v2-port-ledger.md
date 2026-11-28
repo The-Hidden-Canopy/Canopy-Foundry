@@ -213,7 +213,7 @@ that a package is installed or that a cross-project training run succeeded.
 | Surface | Observed contract | Foundry compatibility |
 | --- | --- | --- |
 | IDA CLI public package | Package metadata reports `0.2.1`, Python `>=3.11`; optional inference dependencies are PyTorch `>=2.1`, Transformers `>=4.40`, Accelerate `>=0.28`, and Hugging Face Hub `>=0.26`. Public model loading is safetensors-based. | A client/inference surface, not a Foundry trainer backend or architecture adapter. No training/checkpoint handoff was verified. |
-| NeuroWeave | Local source identifies `0.1.0-dev`; `.nwbrain` schema 1 is a bounded directory package with manifest, NWIR graph, parameters, state policy, and lineage. | Structural/runtime package, not a Foundry weight/checkpoint format. No `.nwbrain` to Foundry model conversion was verified. |
+| Operator-installed private extensions | No public package interface or implementation is supplied by this repository. | No private structural graph, weight or checkpoint conversion is claimed. |
 | NeuroCode | No current checkout or installable package was available in this workspace. | Version, architecture adapters, formats, and checkpoint semantics remain unverified; no adapter is claimed. |
 | Cortex Commons | No public Foundry worker execution profile or cross-project training run was available to verify here. | Foundry does not take over account, organization, quota, or hosted-execution authority. No live Cortex integration is claimed. |
 | Dependency loader | No operator-installed adapter or pinned loader package was available in the Foundry checkout. | Public Foundry remains standalone; deployment-specific adapters remain operator-installed and outside the public tree. |
@@ -222,7 +222,7 @@ Foundry's current public architecture surfaces are the explicit GPT-2
 `hf_gpt2_native_v1` converter contract, the native Llama-shaped dense contract
 (including SmolLM-shaped models), and the generic top-k SwiGLU MoE contract
 (observed Mixtral-shaped surface). Qwen-MoE shared-expert layouts are rejected.
-These are Foundry conversion contracts, not IDA CLI, NeuroWeave, or NeuroCode
+These are Foundry conversion contracts, not IDA CLI or separate operator-installed
 adapters; package names alone do not establish layout compatibility.
 
 Foundry's actual resumable CUDA path remains the existing single-GPU native
